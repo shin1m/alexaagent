@@ -1,0 +1,62 @@
+<html>
+<head>
+<title>Alexa Voice Service Agent</title>
+<style>
+html {
+  width: 100%;
+  height: 100%;
+}
+body {
+  margin: 0em;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.table {
+  display: table;
+  width: 100%;
+  height: 100%;
+}
+.content {
+  display: table-cell;
+  width: 100%;
+  text-align: center;
+  vertical-align: middle;
+}
+#recognize {
+  border-radius: 10vh;
+  background: linear-gradient(yellow, orange);
+  padding: 10vh;
+  font-size: 20vh;
+}
+#recognize:active {
+  background: linear-gradient(orange, yellow);
+}
+</style>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  var sender = function(url) {
+    return function() {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", url);
+      xhr.send();
+    };
+  };
+  var e = document.getElementById("recognize");
+  e.addEventListener("mousedown", sender("recognize/start"), false);
+  e.addEventListener("mouseup", sender("recognize/finish"), false);
+  e.addEventListener("keydown", sender("recognize/start"), false);
+  e.addEventListener("keyup", sender("recognize/finish"), false);
+}, false);
+</script>
+</head>
+<body>
+<div>
+<div class="table">
+<div class="content">
+<button id="recognize" autofocus>Recognize</button>
+</div>
+</div>
+</div>
+</body>
+</html>
