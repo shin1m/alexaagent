@@ -190,14 +190,19 @@ class t_session
 	std::map<std::pair<std::string, std::string>, std::function<void(const boost::property_tree::ptree&)>> v_handlers{
 		{std::make_pair("SpeechRecognizer", "ExpectSpeech"), [this](const boost::property_tree::ptree& a_directive)
 		{
-			v_expecting_dialog_id = a_directive.get("directive.header.dialogRequestId", v_expecting_dialog_id);
-			auto timeout = a_directive.get<long>("directive.payload.timeoutInMilliseconds");
-			v_scheduler.f_run_in(std::chrono::milliseconds(timeout), [this, dialog_id = v_expecting_dialog_id](auto)
+			v_expecting_dialog_id = a_directive.get("directive.header.dialogRequestId", std::string());
+			v_expecting_speech = [this, timeout = a_directive.get<long>("directive.payload.timeoutInMilliseconds")]
 			{
-				if (v_expecting_dialog_id != dialog_id) return;
-				v_expecting_dialog_id.clear();
-				this->f_empty_event("SpeechRecognizer", "ExpectSpeechTimedOut");
-			});
+				this->f_dialog_acquire(*v_recognizer);
+				std::fprintf(stderr, "expecting speech within %dms.\n", timeout);
+				v_expecting_timeout = &v_scheduler.f_run_in(std::chrono::milliseconds(timeout), [this](auto a_ec)
+				{
+					if (a_ec == boost::asio::error::operation_aborted) return;
+					v_expecting_timeout = nullptr;
+					this->f_empty_event("SpeechRecognizer", "ExpectSpeechTimedOut");
+					this->f_dialog_release();
+				});
+			};
 		}},
 		{std::make_pair("AudioPlayer", "Play"), [this](const boost::property_tree::ptree& a_directive)
 		{
@@ -254,6 +259,7 @@ class t_session
 	};
 	std::map<std::string, t_attached_audio*> v_id2audio;
 	t_channel<t_audio>* v_dialog = nullptr;
+	bool v_dialog_busy = false;
 	t_channel<t_audio>* v_content = nullptr;
 	bool v_pausing = false;
 	std::chrono::steady_clock::time_point v_stuttering;
@@ -265,6 +271,8 @@ class t_session
 	bool v_capture_auto = true;
 	bool v_capture_fullduplex = false;
 	bool v_capture_force = false;
+	std::function<void()> v_expecting_speech;
+	boost::asio::steady_timer* v_expecting_timeout = nullptr;
 	std::string v_expecting_dialog_id;
 	std::chrono::steady_clock::time_point v_last_activity;
 
@@ -390,10 +398,36 @@ class t_session
 			throw nullptr;
 		});
 	}
+	void f_dialog_acquire(t_task& a_task)
+	{
+		while (v_dialog_busy) a_task.f_wait();
+		v_dialog_busy = true;
+		if (v_capture_fullduplex) return;
+		v_content->f_task().f_post([this, &a_task](auto)
+		{
+			if (v_content->f_playing()) this->f_player_event("PlaybackPaused");
+			v_pausing = true;
+			a_task.f_notify();
+			do v_content->f_task().f_wait(); while (v_pausing);
+			if (v_content->f_playing()) this->f_player_event("PlaybackResumed");
+		});
+		do a_task.f_wait(); while (!v_pausing);
+	}
+	void f_dialog_release()
+	{
+		v_dialog_busy = v_pausing = false;
+		v_dialog->f_task().f_notify();
+		v_content->f_task().f_notify();
+		v_recognizer->f_notify();
+	}
 	bool f_capture(ALCdevice* a_device, char* a_buffer, bool a_busy)
 	{
 		while (true) {
-			if ((v_capture_busy && v_capture_auto && (v_capture_fullduplex || !v_dialog->f_playing() && !v_content->f_playing()) || v_capture_force) != a_busy) return false;
+			if (!a_busy && v_dialog->f_empty() && !v_expecting_timeout && v_expecting_speech) {
+				v_expecting_speech();
+				v_expecting_speech = nullptr;
+			}
+			if ((v_capture_busy && v_capture_auto && v_dialog->f_empty() && (v_capture_fullduplex || !v_content->f_playing()) || v_capture_force) != a_busy) return false;
 			ALCint n;
 			alcGetIntegerv(a_device, ALC_CAPTURE_SAMPLES, 1, &n);
 			if (n >= 160) break;
@@ -424,6 +458,12 @@ class t_session
 				size_t n = deque.size() + sizeof(buffer);
 				if (n > window) deque.erase(deque.begin(), deque.begin() + (n - window));
 				deque.insert(deque.end(), buffer, buffer + sizeof(buffer));
+			}
+			if (v_expecting_timeout) {
+				v_expecting_timeout->cancel();
+				v_expecting_timeout = nullptr;
+			} else {
+				f_dialog_acquire(*v_recognizer);
 			}
 			std::fprintf(stderr, "recognize started.\n");
 			deque.insert(deque.begin(), v_boundary_audio.begin(), v_boundary_audio.end());
@@ -469,6 +509,7 @@ class t_session
 					deque.insert(deque.end(), buffer, buffer + 320);
 					if (*p) request->resume();
 				}
+				f_dialog_release();
 				if (*p) {
 					deque.insert(deque.end(), v_boundary_terminator.begin(), v_boundary_terminator.end());
 					queue->second = true;
@@ -480,6 +521,7 @@ class t_session
 			} else {
 				std::fprintf(stderr, "recognize failed.\n");
 				while (f_capture(device.get(), buffer, true));
+				f_dialog_release();
 			}
 			v_last_activity = std::chrono::steady_clock::now();
 		}
@@ -542,20 +584,11 @@ public:
 			};
 			v_dialog->f_run([this, &f]
 			{
-				v_content->f_task().f_post([this](auto)
-				{
-					if (v_content->f_playing()) this->f_player_event("PlaybackPaused");
-					v_pausing = true;
-					v_dialog->f_task().f_notify();
-					do v_content->f_task().f_wait(); while (v_pausing);
-					if (v_content->f_playing()) this->f_player_event("PlaybackResumed");
-				});
-				do v_dialog->f_task().f_wait(); while (!v_pausing);
+				this->f_dialog_acquire(v_dialog->f_task());
 				f("SpeechStarted");
 			}, [] {}, std::bind(f, "SpeechFinished"), [] {}, [](auto&) {}, [this]
 			{
-				v_pausing = false;
-				v_content->f_task().f_notify();
+				this->f_dialog_release();
 			}, [] {}, [] {});
 		});
 		v_scheduler.f_spawn([this](auto& a_task)

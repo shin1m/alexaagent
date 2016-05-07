@@ -22,14 +22,9 @@ public:
 	{
 		return v_task;
 	}
-	void f_queue(std::unique_ptr<T_audio>&& a_audio)
+	bool f_empty() const
 	{
-		v_audios.push_back(std::move(a_audio));
-		v_task.f_notify();
-	}
-	void f_clear()
-	{
-		v_audios.clear();
+		return v_audios.empty() && !v_playing;
 	}
 	T_audio* f_playing() const
 	{
@@ -38,6 +33,15 @@ public:
 	long f_offset() const
 	{
 		return v_offset;
+	}
+	void f_queue(std::unique_ptr<T_audio>&& a_audio)
+	{
+		v_audios.push_back(std::move(a_audio));
+		v_task.f_notify();
+	}
+	void f_clear()
+	{
+		v_audios.clear();
 	}
 	template<typename T_started, typename T_finishing, typename T_finished, typename T_stopped, typename T_failed, typename T_finally, typename T_stuttering, typename T_stuttered>
 	void f_run(T_started a_started, T_finishing a_finishing, T_finished a_finished, T_stopped a_stopped, T_failed a_failed, T_finally a_finally, T_stuttering a_stuttering, T_stuttered a_stuttered)
@@ -68,8 +72,8 @@ public:
 			} catch (std::exception& e) {
 				a_failed(e);
 			}
-			a_finally();
 			v_playing.reset();
+			a_finally();
 		}
 	}
 };
