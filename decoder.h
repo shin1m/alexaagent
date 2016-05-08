@@ -269,6 +269,10 @@ public:
 	{
 		return v_processed + v_offset;
 	}
+	void f_reset()
+	{
+		v_remain = v_processed = v_offset = 0.0;
+	}
 	void operator()(size_t a_channels, size_t a_bytes, const char* a_p, size_t a_n, size_t a_rate)
 	{
 		ALint n = f_get(AL_BUFFERS_PROCESSED);

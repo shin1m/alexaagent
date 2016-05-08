@@ -17,7 +17,6 @@ alexaagent_SOURCES = \
 	multipart.h \
 	decoder.h \
 	scheduler.h \
-	channel.h \
 	tiny_http.h \
 	alexaagent.cc
 play_file_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAVUTIL_LIBS)
