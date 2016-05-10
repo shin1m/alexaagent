@@ -73,7 +73,7 @@ class t_session
 		t_session& v_session;
 		t_task& v_task;
 		std::map<std::string, t_attached_audio*>::iterator v_i;
-		std::deque<char> v_data;
+		boost::asio::streambuf v_data;
 		bool v_finished = false;
 		t_parser* v_parser = nullptr;
 
@@ -91,22 +91,20 @@ class t_session
 		{
 			return new t_callback_audio_source([this, a_stuttering = std::move(a_stuttering), a_stuttered = std::move(a_stuttered)](auto a_p, auto a_n)
 			{
-				if (v_data.empty()) {
+				if (v_data.size() <= 0) {
 					if (v_finished) return 0;
 					v_task.f_wait();
-					if (v_data.empty()) {
+					if (v_data.size() <= 0) {
 						if (v_finished) return 0;
 						a_stuttering();
-						do v_task.f_wait(); while (v_data.empty() && !v_finished);
+						do v_task.f_wait(); while (v_data.size() <= 0 && !v_finished);
 						a_stuttered();
-						if (v_data.empty()) return 0;
+						if (v_data.size() <= 0) return 0;
 					}
 				}
-				if (a_n > v_data.size()) a_n = v_data.size();
-				auto i = v_data.begin();
-				std::copy_n(i, a_n, a_p);
-				v_data.erase(i, i + a_n);
-				return a_n;
+				int n = boost::asio::buffer_copy(boost::asio::buffer(a_p, a_n), v_data.data());
+				v_data.consume(n);
+				return n;
 			});
 		}
 	};
@@ -147,8 +145,8 @@ class t_session
 		}
 		void f_audio_content(const char* a_p, size_t a_n)
 		{
-			auto& data = v_audio->v_data;
-			data.insert(data.end(), a_p, a_p + a_n);
+			boost::asio::buffer_copy(v_audio->v_data.prepare(a_n), boost::asio::buffer(a_p, a_n));
+			v_audio->v_data.commit(a_n);
 			v_audio->v_task.f_notify();
 		}
 		void f_audio_finish()
@@ -624,7 +622,11 @@ class t_session
 	{
 		while (true) {
 			std::unique_ptr<ALCdevice, decltype(&alcCaptureCloseDevice)> device(alcCaptureOpenDevice(NULL, 16000, AL_FORMAT_MONO16, 1600), alcCaptureCloseDevice);
-			if (!device) throw std::runtime_error("alcCaptureOpenDevice");
+			if (!device) {
+				std::fprintf(stderr, "alcCaptureOpenDevice: %d\n", alGetError());
+				v_recognizer->f_wait(std::chrono::seconds(5));
+				continue;
+			}
 			alcCaptureStart(device.get());
 			auto queue = std::make_shared<std::pair<std::deque<char>, bool>>(std::make_pair(std::deque<char>(), false));
 			auto& deque = queue->first;
