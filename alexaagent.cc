@@ -1,5 +1,6 @@
 #include <deque>
 #include <cstdio>
+#include <boost/asio/system_timer.hpp>
 #include <nghttp2/asio_http2_server.h>
 #include <nghttp2/asio_http2_client.h>
 #include <boost/property_tree/ptree.hpp>
@@ -19,7 +20,6 @@ std::string f_to_json(const boost::property_tree::ptree& a_tree, bool a_pretty)
 
 class t_session
 {
-	struct t_parser;
 	struct t_channel
 	{
 		t_task& v_task;
@@ -60,6 +60,14 @@ class t_session
 			while (v_target.f_flush() > 0) v_task.f_wait(std::chrono::milliseconds(static_cast<int>(v_target.f_remain() * 250.0)));
 		}
 	};
+	struct t_alert
+	{
+		std::string v_type;
+		std::string v_at;
+		std::unique_ptr<boost::asio::system_timer> v_timer;
+		bool v_active = false;
+	};
+	struct t_parser;
 	struct t_attached_audio
 	{
 		t_session& v_session;
@@ -224,6 +232,17 @@ class t_session
 				do v_dialog->v_task.f_wait(); while (v_expecting_speech);
 			});
 		}},
+		{std::make_pair("Alerts", "SetAlert"), [this](const boost::property_tree::ptree& a_directive)
+		{
+			auto token = a_directive.get<std::string>("directive.payload.token");
+			try {
+				this->f_alerts_set(token, a_directive.get<std::string>("directive.payload.type"), a_directive.get<std::string>("directive.payload.scheduledTime"));
+				this->f_alerts_save();
+				this->f_alerts_event("SetAlertSucceeded", token);
+			} catch (std::exception&) {
+				this->f_alerts_event("SetAlertFailed", token);
+			}
+		}},
 		{std::make_pair("AudioPlayer", "Play"), [this](const boost::property_tree::ptree& a_directive)
 		{
 			auto behavior = a_directive.get<std::string>("directive.payload.playBehavior");
@@ -365,6 +384,7 @@ class t_session
 	boost::asio::steady_timer* v_expecting_timeout = nullptr;
 	std::string v_expecting_dialog_id;
 	std::chrono::steady_clock::time_point v_last_activity;
+	std::map<std::string, t_alert> v_alerts;
 
 	void f_reconnect()
 	{
@@ -390,6 +410,21 @@ class t_session
 			player.put("payload.offsetInMilliseconds", v_content->f_offset());
 			player.put("payload.playerActivity", v_pausing ? "STOPPED" : v_stuttering > std::chrono::steady_clock::time_point() ? "BUFFER_UNDERRUN" : "PLAYING");
 		}
+		boost::property_tree::ptree alerts;
+		if (!v_alerts.empty()) {
+			alerts.put("header.namespace", "Alerts");
+			alerts.put("header.name", "AlertsState");
+			auto& all = alerts.put("payload.allAlerts", std::string());
+			auto& active = alerts.put("payload.activeAlerts", std::string());
+			for (auto& x : v_alerts) {
+				boost::property_tree::ptree alert;
+				alert.put("token", x.first);
+				alert.put("type", x.second.v_type);
+				alert.put("scheduledTime", x.second.v_at);
+				all.push_back(boost::property_tree::ptree::value_type(std::string(), alert));
+				if (x.second.v_active) active.push_back(boost::property_tree::ptree::value_type(std::string(), alert));
+			}
+		}
 		boost::property_tree::ptree synthesizer;
 		synthesizer.put("header.namespace", "SpeechSynthesizer");
 		synthesizer.put("header.name", "SpeechState");
@@ -402,9 +437,9 @@ class t_session
 			synthesizer.put("payload.offsetInMilliseconds", v_dialog->f_offset());
 			synthesizer.put("payload.playerActivity", "PLAYING");
 		}
-		a_metadata.put("context", std::string());
-		auto& context = a_metadata.find("context")->second;
+		auto& context = a_metadata.put("context", std::string());
 		context.push_back(boost::property_tree::ptree::value_type(std::string(), player));
+		if (!v_alerts.empty()) context.push_back(boost::property_tree::ptree::value_type(std::string(), alerts));
 		context.push_back(boost::property_tree::ptree::value_type(std::string(), synthesizer));
 	}
 	void f_metadata(const std::string& a_namespace, const std::string& a_name, boost::property_tree::ptree& a_metadata)
@@ -472,6 +507,60 @@ class t_session
 		f_metadata(a_namespace, a_name, metadata);
 		metadata.put("event.payload.foo", "bar");
 		f_event(metadata);
+	}
+	void f_alerts_event(const std::string& a_name, const std::string& a_token)
+	{
+		boost::property_tree::ptree metadata;
+		f_metadata("Alerts", a_name, metadata);
+		metadata.put("event.payload.token", a_token);
+		f_event(metadata);
+	}
+	void f_alerts_set(const std::string& a_token, const std::string& a_type, const std::string& a_at)
+	{
+		std::tm tm{};
+		std::stringstream s(a_at);
+		s >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+		if (s.fail()) throw std::runtime_error("invalid format");
+		auto t = std::mktime(&tm);
+		tzset();
+		t -= timezone;
+		if (t == -1) throw std::runtime_error("invalid time");
+		auto i = v_alerts.insert(std::make_pair(a_token, t_alert{a_type, a_at})).first;
+		i->second.v_timer.reset(new boost::asio::system_timer(v_scheduler.f_io(), std::chrono::system_clock::from_time_t(t)));
+		i->second.v_timer->async_wait([this, i](auto a_ec)
+		{
+			std::fprintf(stderr, "alert: %s\n", i->first.c_str());
+			i->second.v_active = true;
+			this->f_alerts_event("AlertStarted", i->first);
+			i->second.v_active = false;
+			this->f_alerts_event("AlertStopped", i->first);
+			v_alerts.erase(i);
+			this->f_alerts_save();
+		});
+	}
+	void f_alerts_load()
+	{
+		std::ifstream s("alerts.json");
+		if (!s) return;
+		try {
+			boost::property_tree::ptree alerts;
+			boost::property_tree::read_json(s, alerts);
+			for (auto& x : alerts) f_alerts_set(x.second.get<std::string>("token"), x.second.get<std::string>("type"), x.second.get<std::string>("scheduledTime"));
+		} catch (std::exception&) {
+		}
+	}
+	void f_alerts_save()
+	{
+		boost::property_tree::ptree alerts;
+		for (auto& x : v_alerts) {
+			boost::property_tree::ptree alert;
+			alert.put("token", x.first);
+			alert.put("type", x.second.v_type);
+			alert.put("scheduledTime", x.second.v_at);
+			alerts.push_back(boost::property_tree::ptree::value_type(std::string(), alert));
+		}
+		std::ofstream s("alerts.json");
+		boost::property_tree::write_json(s, alerts);
 	}
 	void f_player_event(const std::string& a_name)
 	{
@@ -639,6 +728,7 @@ class t_session
 				this->f_metadata("System", "SynchronizeState", metadata);
 				metadata.put("event.payload.foo", "bar");
 				this->f_event(metadata);
+				this->f_alerts_load();
 			});
 			request->on_close([request](auto a_code)
 			{
