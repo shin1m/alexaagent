@@ -14,6 +14,7 @@ endif
 bin_PROGRAMS = alexaagent play_file play_url
 alexaagent_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAVUTIL_LIBS) $(OPENSSL_LIBS) $(LIBNGHTTP2_ASIO_LIBS) -lboost_system -lboost_coroutine -lpthread
 alexaagent_SOURCES = \
+	json.h \
 	multipart.h \
 	decoder.h \
 	scheduler.h \
