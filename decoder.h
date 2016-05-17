@@ -261,6 +261,10 @@ public:
 		alDeleteBuffers(buffers.size(), buffers.data());
 		alDeleteSources(1, &v_source);
 	}
+	operator ALuint() const
+	{
+		return v_source;
+	}
 	double f_remain() const
 	{
 		return v_remain;

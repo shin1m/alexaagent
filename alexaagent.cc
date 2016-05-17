@@ -58,7 +58,25 @@ class t_session
 		std::string v_type;
 		std::string v_at;
 		std::unique_ptr<boost::asio::system_timer> v_timer;
-		bool v_active = false;
+		std::unique_ptr<ALuint, void (*)(ALuint*)> v_source{nullptr, [](auto a_x)
+		{
+			alDeleteSources(1, a_x);
+		}};
+
+		void f_play(ALuint a_buffer, ALfloat a_gain)
+		{
+			if (v_source) {
+				alSourceStop(*v_source);
+			} else {
+				ALuint source;
+				alGenSources(1, &source);
+				v_source.reset(new ALuint(source));
+				alSourcei(source, AL_LOOPING, AL_TRUE);
+			}
+			alSourcei(*v_source, AL_BUFFER, a_buffer);
+			alSourcef(*v_source, AL_GAIN, a_gain);
+			alSourcePlay(*v_source);
+		}
 	};
 	struct t_parser;
 	struct t_attached_audio
@@ -380,7 +398,9 @@ class t_session
 	t_channel* v_dialog = nullptr;
 	bool v_dialog_active = false;
 	std::map<std::string, t_alert> v_alerts;
+	ALuint v_alerts_buffers[4];
 	t_channel* v_content = nullptr;
+	bool v_content_can_play_in_background = false;
 	bool v_content_pausing = false;
 	std::chrono::steady_clock::time_point v_stuttering;
 	t_task* v_recognizer = nullptr;
@@ -427,7 +447,7 @@ class t_session
 				{"type", picojson::value(x.second.v_type)},
 				{"scheduledTime", picojson::value(x.second.v_at)}
 			});
-			if (x.second.v_active) active.push_back(alert);
+			if (x.second.v_source) active.push_back(alert);
 			all.push_back(std::move(alert));
 		}
 		picojson::value alerts(picojson::value::object{
@@ -539,20 +559,36 @@ class t_session
 		i->second.v_timer.reset(new boost::asio::system_timer(v_scheduler.f_io(), std::chrono::system_clock::from_time_t(t)));
 		i->second.v_timer->async_wait([this, i](auto a_ec)
 		{
-			if (a_ec == boost::asio::error::operation_aborted) return;
+			if (a_ec == boost::asio::error::operation_aborted) {
+				v_alerts.erase(i);
+				this->f_alerts_save();
+				return;
+			}
 			std::fprintf(stderr, "alert: %s\n", i->first.c_str());
-			i->second.v_active = true;
-			this->f_alerts_event("AlertStarted", i->first);
-			i->second.v_active = false;
-			this->f_alerts_event("AlertStopped", i->first);
-			v_alerts.erase(i);
-			this->f_alerts_save();
+			auto f = [this, i]
+			{
+				i->second.f_play(v_alerts_buffers[(i->second.v_type == "TIMER" ? 0 : 2) + (v_dialog_active ? 1 : 0)], v_dialog_active ? 1.0f / 16.0f : 1.0f);
+				this->f_alerts_event("AlertStarted", i->first);
+				v_scheduler.f_run_in(std::chrono::seconds(10), [this, i](auto)
+				{
+					this->f_alerts_event("AlertStopped", i->first);
+					v_alerts.erase(i);
+					this->f_alerts_save();
+					if (v_dialog_active) return;
+					for (auto& x : v_alerts) if (x.second.v_source) return;
+					this->f_player_foreground();
+				});
+			};
+			if (v_dialog_active)
+				f();
+			else
+				this->f_player_background(f);
 		});
 	}
 	void f_alerts_delete(const std::string& a_token)
 	{
 		auto& alert = v_alerts.at(a_token);
-		if (alert.v_active) throw std::runtime_error("already active");
+		if (alert.v_source) throw std::runtime_error("already active");
 		alert.v_timer->cancel();
 	}
 	void f_alerts_load()
@@ -567,13 +603,13 @@ class t_session
 	}
 	void f_alerts_save()
 	{
-		picojson::value alerts;
+		picojson::value alerts(picojson::value::object{});
 		for (auto& x : v_alerts) alerts << x.first & picojson::value::object{
 			{"type", picojson::value(x.second.v_type)},
 			{"scheduledTime", picojson::value(x.second.v_at)}
 		};
 		std::ofstream s("alerts.json");
-		s << alerts;
+		alerts.serialize(std::ostreambuf_iterator<char>(s), true);
 	}
 	void f_player_event(const std::string& a_name)
 	{
@@ -589,26 +625,68 @@ class t_session
 			throw nullptr;
 		});
 	}
+	template<typename T_done>
+	void f_player_background(T_done a_done)
+	{
+		if (v_content_can_play_in_background) {
+			alSourcef(v_content->v_target, AL_GAIN, 0.5f);
+			a_done();
+		} else if (v_content_pausing) {
+			a_done();
+		} else {
+			auto timer = std::make_shared<boost::asio::steady_timer>(v_scheduler.f_io(), std::chrono::duration<int>::max());
+			v_content->v_task.f_post([this, timer](auto)
+			{
+				if (!v_content->v_playing.empty()) this->f_player_event("PlaybackPaused");
+				v_content_pausing = true;
+				timer->cancel();
+				do v_content->v_task.f_wait(); while (v_content_pausing);
+				if (!v_content->v_playing.empty()) this->f_player_event("PlaybackResumed");
+			});
+			timer->async_wait([a_done](auto)
+			{
+				a_done();
+			});
+		}
+	}
+	void f_player_foreground()
+	{
+		if (v_content_can_play_in_background) {
+			alSourcef(v_content->v_target, AL_GAIN, 1.0f);
+		} else {
+			v_content_pausing = false;
+			v_content->v_task.f_notify();
+		}
+	}
 	void f_dialog_acquire(t_task& a_task)
 	{
 		while (v_dialog_active) a_task.f_wait();
 		v_dialog_active = true;
-		if (v_capture_fullduplex) return;
-		v_content->v_task.f_post([this, &a_task](auto)
+		for (auto& x : v_alerts) {
+			if (!x.second.v_source) continue;
+			x.second.f_play(v_alerts_buffers[x.second.v_type == "TIMER" ? 1 : 3], 1.0f / 16.0f);
+			f_alerts_event("AlertEnteredBackground", x.first);
+		}
+		bool done = false;
+		f_player_background([&]
 		{
-			if (!v_content->v_playing.empty()) this->f_player_event("PlaybackPaused");
-			v_content_pausing = true;
+			done = true;
 			a_task.f_notify();
-			do v_content->v_task.f_wait(); while (v_content_pausing);
-			if (!v_content->v_playing.empty()) this->f_player_event("PlaybackResumed");
 		});
-		do a_task.f_wait(); while (!v_content_pausing);
+		while (!done) a_task.f_wait();
 	}
 	void f_dialog_release()
 	{
-		v_dialog_active = v_content_pausing = false;
+		bool b = false;
+		for (auto& x : v_alerts) {
+			if (!x.second.v_source) continue;
+			x.second.f_play(v_alerts_buffers[x.second.v_type == "TIMER" ? 0 : 2], 1.0f);
+			f_alerts_event("AlertEnteredForeground", x.first);
+			b = true;
+		}
+		if (!b) f_player_foreground();
+		v_dialog_active = false;
 		v_dialog->v_task.f_notify();
-		v_content->v_task.f_notify();
 		v_recognizer->f_notify();
 	}
 	bool f_capture(ALCdevice* a_device, char* a_buffer, bool a_busy)
@@ -629,7 +707,7 @@ class t_session
 		v_capture_busy = now - v_capture_exceeded < std::chrono::seconds(1);
 		size_t m = v_capture_threshold / 1024;
 		size_t n = v_capture_integral / 1024;
-		std::fprintf(stderr, "%s: %s\x1b[K\r", v_capture_busy ? "BUSY" : "IDLE", (n > m ? std::string(m, '#') + std::string(std::min(n, size_t(72)) - m, '=') : std::string(n, '#')).c_str());
+		std::fprintf(stderr, "%s: %s\x1b[K\r", v_capture_busy ? "BUSY" : "IDLE", (n > m ? std::string(m, '#') + std::string(std::min(n, size_t(72)) - m, '=') : std::string(n, '#') + std::string(m - n, ' ') + '|').c_str());
 		return true;
 	}
 	void f_recognizer()
@@ -755,6 +833,21 @@ class t_session
 			this->f_reconnect();
 		});
 	}
+	void f_load_sound(ALuint a_buffer, const char* a_path)
+	{
+		t_url_audio_source source(a_path);
+		t_audio_decoder decoder(source);
+		ALenum format = AL_FORMAT_MONO8;
+		std::vector<char> data;
+		ALsizei rate = 0;
+		decoder([&](size_t a_channels, size_t a_bytes, const char* a_p, size_t a_n, size_t a_rate)
+		{
+			format = a_channels == 1 ? (a_bytes == 1 ? AL_FORMAT_MONO8 : AL_FORMAT_MONO16) : (a_bytes == 1 ? AL_FORMAT_STEREO8 : AL_FORMAT_STEREO16);
+			data.insert(data.end(), a_p, a_p + a_n);
+			rate = a_rate;
+		});
+		alBufferData(a_buffer, format, data.data(), data.size(), rate);
+	}
 
 public:
 	t_session(t_scheduler& a_scheduler, const std::string& a_token) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler)
@@ -763,6 +856,11 @@ public:
 		boost::system::error_code ec;
 		nghttp2::asio_http2::client::configure_tls_context(ec, v_tls);
 		f_token(a_token);
+		alGenBuffers(4, v_alerts_buffers);
+		f_load_sound(v_alerts_buffers[0], "assets/timer-foreground");
+		f_load_sound(v_alerts_buffers[1], "assets/timer-background");
+		f_load_sound(v_alerts_buffers[2], "assets/alarm-foreground");
+		f_load_sound(v_alerts_buffers[3], "assets/alarm-background");
 		v_scheduler.f_spawn([this](auto& a_task)
 		{
 			t_channel dialog(a_task);
@@ -788,6 +886,10 @@ public:
 			return true;
 		});
 		f_connect();
+	}
+	~t_session()
+	{
+		alDeleteBuffers(4, v_alerts_buffers);
 	}
 	void f_token(const std::string& a_token)
 	{
@@ -836,11 +938,11 @@ int main(int argc, char* argv[])
 	std::unique_ptr<t_scheduler> scheduler;
 	std::unique_ptr<t_session> session;
 	std::function<void(const std::string&)> f_refresh;
-	auto grant = [&](std::map<std::string, std::string>&& a_query, std::function<void()> a_next)
+	auto grant = [&](std::map<std::string, std::string>&& a_query, std::function<void()> a_done)
 	{
 		a_query.emplace("client_id", profile / "client_id"_jss);
 		a_query.emplace("client_secret", profile / "client_secret"_jss);
-		f_https_post(*server.io_services().front(), "api.amazon.com", "/auth/o2/token", a_query, [&, a_next](auto a_code, auto&, auto& a_content)
+		f_https_post(*server.io_services().front(), "api.amazon.com", "/auth/o2/token", a_query, [&, a_done](auto a_code, auto&, auto& a_content)
 		{
 			picojson::value result;
 			a_content >> result;
@@ -860,11 +962,11 @@ int main(int argc, char* argv[])
 					f_refresh(refresh_token);
 				});
 			}
-			a_next();
-		}, [a_next](auto a_ec)
+			a_done();
+		}, [a_done](auto a_ec)
 		{
 			std::fprintf(stderr, "grant: %s\n", a_ec.message().c_str());
-			a_next();
+			a_done();
 		});
 	};
 	f_refresh = [&](const std::string& a_token)
