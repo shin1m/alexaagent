@@ -1,5 +1,5 @@
-#ifndef ALEXAAGENT__DECODER_H
-#define ALEXAAGENT__DECODER_H
+#ifndef ALEXAAGENT__AUDIO_H
+#define ALEXAAGENT__AUDIO_H
 
 #include <algorithm>
 #include <functional>

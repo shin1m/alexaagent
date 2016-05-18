@@ -3,7 +3,7 @@
 #include <thread>
 #include <cstdio>
 
-#include "decoder.h"
+#include "audio.h"
 
 int main(int argc, char* argv[])
 {

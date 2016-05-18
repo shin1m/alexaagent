@@ -16,17 +16,18 @@ alexaagent_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAV
 alexaagent_SOURCES = \
 	json.h \
 	multipart.h \
-	decoder.h \
+	audio.h \
 	scheduler.h \
+	session.h \
 	tiny_http.h \
-	alexaagent.cc
+	main.cc
 play_file_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAVUTIL_LIBS)
 play_file_SOURCES = \
-	decoder.h \
+	audio.h \
 	play_file.cc
 play_url_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAVUTIL_LIBS)
 play_url_SOURCES = \
-	decoder.h \
+	audio.h \
 	play_url.cc
 check_PROGRAMS = test_multipart test_tiny_http
 TESTS = test_multipart test_tiny_http
