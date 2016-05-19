@@ -150,7 +150,7 @@ class t_session
 			try {
 				v_session.v_handlers.at(std::make_pair(ns, name))(directive);
 			} catch (std::exception& e) {
-				std::fprintf(stderr, "parser(%p) unknown directive: %s.%s\n", this, ns.c_str(), name.c_str());
+				v_session.f_exception_encountered(ns + '.' + name, "UNSUPPORTED_OPERATION", e);
 			}
 		}
 		void f_audio_content(const char* a_p, size_t a_n)
@@ -255,7 +255,8 @@ class t_session
 				this->f_alerts_set(token, payload / "type"_jss, payload / "scheduledTime"_jss);
 				this->f_alerts_save();
 				this->f_alerts_event("SetAlertSucceeded", token);
-			} catch (std::exception&) {
+			} catch (std::exception& e) {
+				this->f_exception_encountered("Alerts.SetAlert", "INTERNAL_ERROR", e);
 				this->f_alerts_event("SetAlertFailed", token);
 			}
 		}},
@@ -267,7 +268,8 @@ class t_session
 				this->f_alerts_delete(token);
 				this->f_alerts_save();
 				this->f_alerts_event("DeleteAlertSucceeded", token);
-			} catch (std::exception&) {
+			} catch (std::exception& e) {
+				this->f_exception_encountered("Alerts.DeleteAlert", "INTERNAL_ERROR", e);
 				this->f_alerts_event("DeleteAlertFailed", token);
 			}
 		}},
@@ -389,7 +391,8 @@ class t_session
 					t_audio_decoder decoder(*source);
 					v_dialog->f_loop(decoder);
 					v_dialog->f_flush();
-				} catch (std::exception&) {
+				} catch (std::exception& e) {
+					this->f_exception_encountered("SpeechSynthesizer.Speak", "INTERNAL_ERROR", e);
 				}
 				f("SpeechFinished");
 				v_dialog->v_playing.clear();
@@ -546,6 +549,18 @@ class t_session
 	{
 		f_event(f_metadata(a_namespace, a_name, {}));
 	}
+	void f_exception_encountered(const std::string& a_directive, const std::string& a_type, const std::exception& a_e)
+	{
+		auto metadata = f_metadata("System", "ExceptionEncountered", {
+			{"unparsedDirective", picojson::value(a_directive)},
+			{"error", picojson::value(picojson::value::object{
+				{"type", picojson::value(a_type)},
+				{"message", picojson::value(a_e.what())}
+			})}
+		});
+		metadata << "context" & f_context();
+		f_event(metadata);
+	}
 	void f_alerts_event(const std::string& a_name, const std::string& a_token)
 	{
 		f_event(f_metadata("Alerts", a_name, {
@@ -562,8 +577,13 @@ class t_session
 		tzset();
 		t -= timezone;
 		if (t == -1) throw std::runtime_error("invalid time");
+		auto at = std::chrono::system_clock::from_time_t(t);
+		if (at < std::chrono::system_clock::now() - std::chrono::minutes(30)) {
+			f_alerts_event("AlertStopped", a_token);
+			return;
+		}
 		auto i = v_alerts.emplace(a_token, t_alert{a_type, a_at}).first;
-		i->second.v_timer.reset(new boost::asio::system_timer(v_scheduler.f_io(), std::chrono::system_clock::from_time_t(t)));
+		i->second.v_timer.reset(new boost::asio::system_timer(v_scheduler.f_io(), at));
 		i->second.v_timer->async_wait([this, i](auto a_ec)
 		{
 			if (a_ec == boost::asio::error::operation_aborted) {
@@ -605,7 +625,8 @@ class t_session
 			std::ifstream s("alerts.json");
 			s >> alerts;
 			for (auto& x : alerts.get<picojson::value::object>()) f_alerts_set(x.first, x.second / "type"_jss, x.second / "scheduledTime"_jss);
-		} catch (std::exception&) {
+		} catch (std::exception& e) {
+			f_exception_encountered(std::string(), "INTERNAL_ERROR", e);
 		}
 	}
 	void f_alerts_save() const
