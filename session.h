@@ -293,16 +293,16 @@ class t_session
 				{
 					return audio->f_open([this]
 					{
-						v_stuttering = std::chrono::steady_clock::now();
+						v_content_stuttering = std::chrono::steady_clock::now();
 						this->f_player_event("PlaybackStutterStarted");
 					}, [this, token]
 					{
 						this->f_event(this->f_metadata("AudioPlayer", "PlaybackStutterFinished", {
 							{"token", picojson::value(token)},
 							{"offsetInMilliseconds", picojson::value(static_cast<double>(v_content->f_offset()))},
-							{"stutterDurationInMilliseconds", picojson::value(static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - v_stuttering).count()))}
+							{"stutterDurationInMilliseconds", picojson::value(static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - v_content_stuttering).count()))}
 						}));
-						v_stuttering = std::chrono::steady_clock::time_point();
+						v_content_stuttering = std::chrono::steady_clock::time_point();
 					});
 				};
 			else
@@ -371,6 +371,18 @@ class t_session
 			}
 			this->f_empty_event("AudioPlayer", "PlaybackQueueCleared");
 		}},
+		{std::make_pair("Speaker", "SetVolume"), [this](const picojson::value& a_directive)
+		{
+			f_speaker_set_volume(a_directive / "directive" / "payload" / "volume"_jsn);
+		}},
+		{std::make_pair("Speaker", "AdjustVolume"), [this](const picojson::value& a_directive)
+		{
+			f_speaker_set_volume(v_speaker_volume + a_directive / "directive" / "payload" / "volume"_jsn);
+		}},
+		{std::make_pair("Speaker", "SetMute"), [this](const picojson::value& a_directive)
+		{
+			f_speaker_set_muted(a_directive / "directive" / "payload" / "mute"_jsb);
+		}},
 		{std::make_pair("SpeechSynthesizer", "Speak"), [this](const picojson::value& a_directive)
 		{
 			auto& payload = a_directive / "directive" / "payload";
@@ -412,7 +424,9 @@ class t_session
 	t_channel* v_content = nullptr;
 	bool v_content_can_play_in_background = false;
 	bool v_content_pausing = false;
-	std::chrono::steady_clock::time_point v_stuttering;
+	std::chrono::steady_clock::time_point v_content_stuttering;
+	long v_speaker_volume = 100;
+	bool v_speaker_muted = false;
 	t_task* v_recognizer = nullptr;
 	size_t v_capture_threshold = 32 * 1024;
 	size_t v_capture_integral = 0;
@@ -438,17 +452,6 @@ class t_session
 	}
 	picojson::value f_context() const
 	{
-		picojson::value player(picojson::value::object{
-			{"header", picojson::value(picojson::value::object{
-				{"namespace", picojson::value("AudioPlayer")},
-				{"name", picojson::value("PlaybackState")}
-			})},
-			{"payload", picojson::value(picojson::value::object{
-				{"token", picojson::value(v_content->v_playing)},
-				{"offsetInMilliseconds", picojson::value(static_cast<double>(v_content->v_playing.empty() ? 0 : v_content->f_offset()))},
-				{"playerActivity", picojson::value(v_content->v_playing.empty() ? (v_content->f_offset() > 0 ? "FINISHED" : "IDLE") : v_content_pausing ? "STOPPED" : v_stuttering > std::chrono::steady_clock::time_point() ? "BUFFER_UNDERRUN" : "PLAYING")}
-			})}
-		});
 		picojson::value::array all;
 		picojson::value::array active;
 		for (auto& x : v_alerts) {
@@ -460,28 +463,50 @@ class t_session
 			if (x.second.v_source) active.push_back(alert);
 			all.push_back(std::move(alert));
 		}
-		picojson::value alerts(picojson::value::object{
-			{"header", picojson::value(picojson::value::object{
-				{"namespace", picojson::value("Alerts")},
-				{"name", picojson::value("AlertsState")}
-			})},
-			{"payload", picojson::value(picojson::value::object{
-				{"allAlerts", picojson::value(all)},
-				{"activeAlerts", picojson::value(active)}
-			})}
+		return picojson::value(picojson::value::array{
+			picojson::value(picojson::value::object{
+				{"header", picojson::value(picojson::value::object{
+					{"namespace", picojson::value("AudioPlayer")},
+					{"name", picojson::value("PlaybackState")}
+				})},
+				{"payload", picojson::value(picojson::value::object{
+					{"token", picojson::value(v_content->v_playing)},
+					{"offsetInMilliseconds", picojson::value(static_cast<double>(v_content->v_playing.empty() ? 0 : v_content->f_offset()))},
+					{"playerActivity", picojson::value(v_content->v_playing.empty() ? (v_content->f_offset() > 0 ? "FINISHED" : "IDLE") : v_content_pausing ? "STOPPED" : v_content_stuttering > std::chrono::steady_clock::time_point() ? "BUFFER_UNDERRUN" : "PLAYING")}
+				})}
+			}),
+			picojson::value(picojson::value::object{
+				{"header", picojson::value(picojson::value::object{
+					{"namespace", picojson::value("Alerts")},
+					{"name", picojson::value("AlertsState")}
+				})},
+				{"payload", picojson::value(picojson::value::object{
+					{"allAlerts", picojson::value(all)},
+					{"activeAlerts", picojson::value(active)}
+				})}
+			}),
+			picojson::value(picojson::value::object{
+				{"header", picojson::value(picojson::value::object{
+					{"namespace", picojson::value("Speaker")},
+					{"name", picojson::value("VolumeState")}
+				})},
+				{"payload", picojson::value(picojson::value::object{
+					{"volume", picojson::value(static_cast<double>(v_speaker_volume))},
+					{"muted", picojson::value(v_speaker_muted)}
+				})}
+			}),
+			picojson::value(picojson::value::object{
+				{"header", picojson::value(picojson::value::object{
+					{"namespace", picojson::value("SpeechSynthesizer")},
+					{"name", picojson::value("SpeechState")}
+				})},
+				{"payload", picojson::value(picojson::value::object{
+					{"token", picojson::value(v_dialog->v_playing)},
+					{"offsetInMilliseconds", picojson::value(static_cast<double>(v_dialog->v_playing.empty() ? 0 : v_dialog->f_offset()))},
+					{"playerActivity", picojson::value(v_dialog->v_playing.empty() ? "FINISHED" : "PLAYING")}
+				})}
+			})
 		});
-		picojson::value synthesizer(picojson::value::object{
-			{"header", picojson::value(picojson::value::object{
-				{"namespace", picojson::value("SpeechSynthesizer")},
-				{"name", picojson::value("SpeechState")}
-			})},
-			{"payload", picojson::value(picojson::value::object{
-				{"token", picojson::value(v_dialog->v_playing)},
-				{"offsetInMilliseconds", picojson::value(static_cast<double>(v_dialog->v_playing.empty() ? 0 : v_dialog->f_offset()))},
-				{"playerActivity", picojson::value(v_dialog->v_playing.empty() ? "FINISHED" : "PLAYING")}
-			})}
-		});
-		return picojson::value(picojson::value::array{player, alerts, synthesizer});
 	}
 	picojson::value f_metadata(const std::string& a_namespace, const std::string& a_name, picojson::value::object&& a_payload)
 	{
@@ -618,17 +643,6 @@ class t_session
 		if (alert.v_source) throw std::runtime_error("already active");
 		alert.v_timer->cancel();
 	}
-	void f_alerts_load()
-	{
-		try {
-			picojson::value alerts;
-			std::ifstream s("alerts.json");
-			s >> alerts;
-			for (auto& x : alerts.get<picojson::value::object>()) f_alerts_set(x.first, x.second / "type"_jss, x.second / "scheduledTime"_jss);
-		} catch (std::exception& e) {
-			f_exception_encountered(std::string(), "INTERNAL_ERROR", e);
-		}
-	}
 	void f_alerts_save() const
 	{
 		picojson::value alerts(picojson::value::object{});
@@ -636,7 +650,7 @@ class t_session
 			{"type", picojson::value(x.second.v_type)},
 			{"scheduledTime", picojson::value(x.second.v_at)}
 		};
-		std::ofstream s("alerts.json");
+		std::ofstream s("data/alerts.json");
 		alerts.serialize(std::ostreambuf_iterator<char>(s), true);
 	}
 	void f_player_event(const std::string& a_name)
@@ -657,7 +671,7 @@ class t_session
 	void f_player_background(T_done a_done)
 	{
 		if (v_content_can_play_in_background) {
-			alSourcef(v_content->v_target, AL_GAIN, 0.5f);
+			alSourcef(v_content->v_target, AL_GAIN, 1.0f / 16.0f);
 			a_done();
 		} else if (v_content_pausing) {
 			a_done();
@@ -685,6 +699,36 @@ class t_session
 			v_content_pausing = false;
 			v_content->v_task.f_notify();
 		}
+	}
+	void f_speaker_event(const std::string& a_name)
+	{
+		f_event(f_metadata("Speaker", a_name, {
+			{"volume", picojson::value(static_cast<double>(v_speaker_volume))},
+			{"muted", picojson::value(v_speaker_muted)}
+		}));
+	}
+	void f_speaker_apply()
+	{
+		alListenerf(AL_GAIN, v_speaker_muted ? 0.0f : v_speaker_volume / 100.0f);
+		std::ofstream s("data/speaker.json");
+		picojson::value(picojson::value::object{
+			{"volume", picojson::value(static_cast<double>(v_speaker_volume))},
+			{"muted", picojson::value(v_speaker_muted)}
+		}).serialize(std::ostreambuf_iterator<char>(s), true);
+	}
+	void f_speaker_set_volume(long a_volume)
+	{
+		if (a_volume < 0) a_volume = 0;
+		if (a_volume > 100) a_volume = 100;
+		v_speaker_volume = a_volume;
+		f_speaker_apply();
+		f_speaker_event("VolumeChanged");
+	}
+	void f_speaker_set_muted(bool a_muted)
+	{
+		v_speaker_muted = a_muted;
+		f_speaker_apply();
+		f_speaker_event("MuteChanged");
 	}
 	void f_dialog_acquire(t_task& a_task)
 	{
@@ -825,6 +869,27 @@ class t_session
 			v_last_activity = std::chrono::steady_clock::now();
 		}
 	}
+	void f_load()
+	{
+		try {
+			picojson::value alerts;
+			std::ifstream s("data/alerts.json");
+			s >> alerts;
+			for (auto& x : alerts.get<picojson::value::object>()) f_alerts_set(x.first, x.second / "type"_jss, x.second / "scheduledTime"_jss);
+		} catch (std::exception& e) {
+			f_exception_encountered(std::string(), "INTERNAL_ERROR", e);
+		}
+		try {
+			picojson::value speaker;
+			std::ifstream s("data/speaker.json");
+			s >> speaker;
+			v_speaker_volume = speaker / "volume"_jsn;
+			v_speaker_muted = speaker / "muted"_jsb;
+		} catch (std::exception& e) {
+			f_exception_encountered(std::string(), "INTERNAL_ERROR", e);
+		}
+		f_speaker_apply();
+	}
 	void f_connect()
 	{
 		v_session.reset(new nghttp2::asio_http2::client::session(v_scheduler.f_io(), v_tls, "avs-alexa-na.amazon.com", "https"));
@@ -848,7 +913,7 @@ class t_session
 				auto metadata = this->f_metadata("System", "SynchronizeState", {});
 				metadata << "context" & this->f_context();
 				this->f_event(metadata);
-				this->f_alerts_load();
+				this->f_load();
 			});
 			request->on_close([request](auto a_code)
 			{

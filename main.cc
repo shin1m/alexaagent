@@ -7,7 +7,7 @@ int main(int argc, char* argv[])
 {
 	picojson::value profile;
 	{
-		std::ifstream s("profile.json");
+		std::ifstream s("data/profile.json");
 		s >> profile;
 	}
 	av_register_all();
@@ -39,7 +39,7 @@ int main(int argc, char* argv[])
 			if (a_code == 200) {
 				auto access_token = result / "access_token"_jss;
 				auto refresh_token = result / "refresh_token"_jss;
-				std::ofstream("token") << refresh_token;
+				std::ofstream("data/token") << refresh_token;
 				if (session)
 					session->f_token(access_token);
 				else
@@ -65,7 +65,7 @@ int main(int argc, char* argv[])
 	};
 	server.handle("/", [&](auto& a_request, auto& a_response)
 	{
-		if (std::ifstream("token")) {
+		if (std::ifstream("data/token")) {
 			a_response.write_head(200);
 			a_response.end(nghttp2::asio_http2::file_generator("index.html"));
 		} else {
@@ -127,7 +127,7 @@ int main(int argc, char* argv[])
 	});
 	{
 		std::string token;
-		std::ifstream("token") >> token;
+		std::ifstream("data/token") >> token;
 		if (!token.empty()) f_refresh(token);
 	}
 	server.join();
