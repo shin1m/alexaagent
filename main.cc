@@ -5,11 +5,13 @@
 
 int main(int argc, char* argv[])
 {
-	picojson::value profile;
+	picojson::value configuration;
 	{
-		std::ifstream s("data/profile.json");
-		s >> profile;
+		std::ifstream s("alexaagent.json");
+		s >> configuration;
 	}
+	auto profile = configuration / "profile";
+	auto sounds = configuration / "sounds";
 	av_register_all();
 	avformat_network_init();
 	std::unique_ptr<ALCdevice, decltype(&alcCloseDevice)> device(alcOpenDevice(NULL), alcCloseDevice);
@@ -39,11 +41,11 @@ int main(int argc, char* argv[])
 			if (a_code == 200) {
 				auto access_token = result / "access_token"_jss;
 				auto refresh_token = result / "refresh_token"_jss;
-				std::ofstream("data/token") << refresh_token;
+				std::ofstream("session/token") << refresh_token;
 				if (session)
 					session->f_token(access_token);
 				else
-					session.reset(new t_session(*scheduler, access_token));
+					session.reset(new t_session(*scheduler, access_token, sounds));
 				scheduler->f_run_in(std::chrono::seconds(static_cast<size_t>(result / "expires_in"_jsn)), [&, refresh_token](auto)
 				{
 					f_refresh(refresh_token);
@@ -65,7 +67,7 @@ int main(int argc, char* argv[])
 	};
 	server.handle("/", [&](auto& a_request, auto& a_response)
 	{
-		if (std::ifstream("data/token")) {
+		if (std::ifstream("session/token")) {
 			a_response.write_head(200);
 			a_response.end(nghttp2::asio_http2::file_generator("index.html"));
 		} else {
@@ -102,13 +104,13 @@ int main(int argc, char* argv[])
 	});
 	server.handle("/recognize/start", [&](auto& a_request, auto& a_response)
 	{
-		if (session) session->f_recognize(true);
+		if (session) session->f_capture_force(true);
 		a_response.write_head(session ? 200 : 500);
 		a_response.end();
 	});
 	server.handle("/recognize/finish", [&](auto& a_request, auto& a_response)
 	{
-		if (session) session->f_recognize(false);
+		if (session) session->f_capture_force(false);
 		a_response.write_head(session ? 200 : 500);
 		a_response.end();
 	});
@@ -127,11 +129,10 @@ int main(int argc, char* argv[])
 	});
 	{
 		std::string token;
-		std::ifstream("data/token") >> token;
+		std::ifstream("session/token") >> token;
 		if (!token.empty()) f_refresh(token);
 	}
 	server.join();
 	std::fprintf(stderr, "server stopped.\n");
 	return 0;
 }
-

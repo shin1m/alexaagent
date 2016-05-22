@@ -220,6 +220,7 @@ class t_session
 	boost::asio::ssl::context v_tls;
 	t_scheduler& v_scheduler;
 	nghttp2::asio_http2::header_map v_header;
+	ALuint v_sounds[4];
 	std::unique_ptr<nghttp2::asio_http2::client::session> v_session;
 	bool v_ready = false;
 	size_t v_message_id = 0;
@@ -420,7 +421,6 @@ class t_session
 	t_channel* v_dialog = nullptr;
 	bool v_dialog_active = false;
 	std::map<std::string, t_alert> v_alerts;
-	ALuint v_alerts_buffers[4];
 	t_channel* v_content = nullptr;
 	bool v_content_can_play_in_background = false;
 	bool v_content_pausing = false;
@@ -619,7 +619,7 @@ class t_session
 			std::fprintf(stderr, "alert: %s\n", i->first.c_str());
 			auto f = [this, i]
 			{
-				i->second.f_play(v_alerts_buffers[(i->second.v_type == "TIMER" ? 0 : 2) + (v_dialog_active ? 1 : 0)], v_dialog_active ? 1.0f / 16.0f : 1.0f);
+				i->second.f_play(v_sounds[(i->second.v_type == "TIMER" ? 0 : 2) + (v_dialog_active ? 1 : 0)], v_dialog_active ? 1.0f / 16.0f : 1.0f);
 				this->f_alerts_event("AlertStarted", i->first);
 				v_scheduler.f_run_in(std::chrono::seconds(10), [this, i](auto)
 				{
@@ -650,7 +650,7 @@ class t_session
 			{"type", picojson::value(x.second.v_type)},
 			{"scheduledTime", picojson::value(x.second.v_at)}
 		};
-		std::ofstream s("data/alerts.json");
+		std::ofstream s("session/alerts.json");
 		alerts.serialize(std::ostreambuf_iterator<char>(s), true);
 	}
 	void f_player_event(const std::string& a_name)
@@ -710,7 +710,7 @@ class t_session
 	void f_speaker_apply()
 	{
 		alListenerf(AL_GAIN, v_speaker_muted ? 0.0f : v_speaker_volume / 100.0f);
-		std::ofstream s("data/speaker.json");
+		std::ofstream s("session/speaker.json");
 		picojson::value(picojson::value::object{
 			{"volume", picojson::value(static_cast<double>(v_speaker_volume))},
 			{"muted", picojson::value(v_speaker_muted)}
@@ -736,7 +736,7 @@ class t_session
 		v_dialog_active = true;
 		for (auto& x : v_alerts) {
 			if (!x.second.v_source) continue;
-			x.second.f_play(v_alerts_buffers[x.second.v_type == "TIMER" ? 1 : 3], 1.0f / 16.0f);
+			x.second.f_play(v_sounds[x.second.v_type == "TIMER" ? 1 : 3], 1.0f / 16.0f);
 			f_alerts_event("AlertEnteredBackground", x.first);
 		}
 		bool done = false;
@@ -752,7 +752,7 @@ class t_session
 		bool b = false;
 		for (auto& x : v_alerts) {
 			if (!x.second.v_source) continue;
-			x.second.f_play(v_alerts_buffers[x.second.v_type == "TIMER" ? 0 : 2], 1.0f);
+			x.second.f_play(v_sounds[x.second.v_type == "TIMER" ? 0 : 2], 1.0f);
 			f_alerts_event("AlertEnteredForeground", x.first);
 			b = true;
 		}
@@ -873,7 +873,7 @@ class t_session
 	{
 		try {
 			picojson::value alerts;
-			std::ifstream s("data/alerts.json");
+			std::ifstream s("session/alerts.json");
 			s >> alerts;
 			for (auto& x : alerts.get<picojson::value::object>()) f_alerts_set(x.first, x.second / "type"_jss, x.second / "scheduledTime"_jss);
 		} catch (std::exception& e) {
@@ -881,7 +881,7 @@ class t_session
 		}
 		try {
 			picojson::value speaker;
-			std::ifstream s("data/speaker.json");
+			std::ifstream s("session/speaker.json");
 			s >> speaker;
 			v_speaker_volume = speaker / "volume"_jsn;
 			v_speaker_muted = speaker / "muted"_jsb;
@@ -926,9 +926,9 @@ class t_session
 			this->f_reconnect();
 		});
 	}
-	void f_load_sound(ALuint a_buffer, const char* a_path)
+	void f_load_sound(ALuint a_buffer, const std::string& a_path)
 	{
-		t_url_audio_source source(a_path);
+		t_url_audio_source source(a_path.c_str());
 		t_audio_decoder decoder(source);
 		ALenum format = AL_FORMAT_MONO8;
 		std::vector<char> data;
@@ -943,17 +943,17 @@ class t_session
 	}
 
 public:
-	t_session(t_scheduler& a_scheduler, const std::string& a_token) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler)
+	t_session(t_scheduler& a_scheduler, const std::string& a_token, const picojson::value& a_sounds) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler)
 	{
 		v_tls.set_default_verify_paths();
 		boost::system::error_code ec;
 		nghttp2::asio_http2::client::configure_tls_context(ec, v_tls);
 		f_token(a_token);
-		alGenBuffers(4, v_alerts_buffers);
-		f_load_sound(v_alerts_buffers[0], "assets/timer-foreground");
-		f_load_sound(v_alerts_buffers[1], "assets/timer-background");
-		f_load_sound(v_alerts_buffers[2], "assets/alarm-foreground");
-		f_load_sound(v_alerts_buffers[3], "assets/alarm-background");
+		alGenBuffers(4, v_sounds);
+		f_load_sound(v_sounds[0], a_sounds / "timer" / "foreground"_jss);
+		f_load_sound(v_sounds[1], a_sounds / "timer" / "background"_jss);
+		f_load_sound(v_sounds[2], a_sounds / "alarm" / "foreground"_jss);
+		f_load_sound(v_sounds[3], a_sounds / "alarm" / "background"_jss);
 		v_scheduler.f_spawn([this](auto& a_task)
 		{
 			t_channel dialog(a_task);
@@ -982,7 +982,7 @@ public:
 	}
 	~t_session()
 	{
-		alDeleteBuffers(4, v_alerts_buffers);
+		alDeleteBuffers(4, v_sounds);
 	}
 	void f_token(const std::string& a_token)
 	{
@@ -991,10 +991,73 @@ public:
 			{"content-type", {"multipart/form-data; boundary=this-is-a-boundary", true}}
 		};
 	}
-	void f_recognize(bool a_run)
+	bool f_dialog_active() const
 	{
-		v_capture_force = a_run;
+		return v_dialog_active;
+	}
+	bool f_content_can_play_in_background() const
+	{
+		return v_content_can_play_in_background;
+	}
+	void f_content_can_play_in_background(bool a_value)
+	{
+		v_content_can_play_in_background = a_value;
+	}
+	long f_speaker_volume() const
+	{
+		return v_speaker_volume;
+	}
+	bool f_speaker_muted() const
+	{
+		return v_speaker_muted;
+	}
+	size_t f_capture_threshold() const
+	{
+		return v_capture_threshold;
+	}
+	void f_capture_threshold(size_t a_value)
+	{
+		v_capture_threshold = a_value;
 		v_recognizer->f_notify();
+	}
+	size_t f_capture_integral() const
+	{
+		return v_capture_integral;
+	}
+	bool f_capture_busy() const
+	{
+		return v_capture_busy;
+	}
+	bool f_capture_auto() const
+	{
+		return v_capture_auto;
+	}
+	void f_capture_auto(bool a_value)
+	{
+		v_capture_auto = a_value;
+		v_recognizer->f_notify();
+	}
+	bool f_capture_fullduplex() const
+	{
+		return v_capture_fullduplex;
+	}
+	void f_capture_fullduplex(bool a_value)
+	{
+		v_capture_fullduplex = a_value;
+		v_recognizer->f_notify();
+	}
+	bool f_capture_force() const
+	{
+		return v_capture_force;
+	}
+	void f_capture_force(bool a_value)
+	{
+		v_capture_force = a_value;
+		v_recognizer->f_notify();
+	}
+	bool f_expecting_speech() const
+	{
+		return static_cast<bool>(v_expecting_speech);
 	}
 };
 
