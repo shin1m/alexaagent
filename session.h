@@ -780,6 +780,7 @@ class t_session
 		size_t m = v_capture_threshold / 1024;
 		size_t n = v_capture_integral / 1024;
 		std::fprintf(stderr, "%s: %s\x1b[K\r", v_capture_busy ? "BUSY" : "IDLE", (n > m ? std::string(m, '#') + std::string(std::min(n, size_t(72)) - m, '=') : std::string(n, '#') + std::string(m - n, ' ') + '|').c_str());
+		if (v_state_changed) v_state_changed();
 		return true;
 	}
 	void f_recognizer()
@@ -943,6 +944,9 @@ class t_session
 	}
 
 public:
+	std::function<void()> v_state_changed;
+	std::function<void()> v_options_changed;
+
 	t_session(t_scheduler& a_scheduler, const std::string& a_token, const picojson::value& a_sounds) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler)
 	{
 		v_tls.set_default_verify_paths();
@@ -984,6 +988,10 @@ public:
 	{
 		alDeleteBuffers(4, v_sounds);
 	}
+	t_scheduler& f_scheduler() const
+	{
+		return v_scheduler;
+	}
 	void f_token(const std::string& a_token)
 	{
 		v_header = nghttp2::asio_http2::header_map{
@@ -1001,7 +1009,9 @@ public:
 	}
 	void f_content_can_play_in_background(bool a_value)
 	{
+		if (a_value == v_content_can_play_in_background) return;
 		v_content_can_play_in_background = a_value;
+		if (v_options_changed) v_options_changed();
 	}
 	long f_speaker_volume() const
 	{
@@ -1017,8 +1027,10 @@ public:
 	}
 	void f_capture_threshold(size_t a_value)
 	{
+		if (a_value == v_capture_threshold) return;
 		v_capture_threshold = a_value;
 		v_recognizer->f_notify();
+		if (v_options_changed) v_options_changed();
 	}
 	size_t f_capture_integral() const
 	{
@@ -1034,8 +1046,10 @@ public:
 	}
 	void f_capture_auto(bool a_value)
 	{
+		if (a_value == v_capture_auto) return;
 		v_capture_auto = a_value;
 		v_recognizer->f_notify();
+		if (v_options_changed) v_options_changed();
 	}
 	bool f_capture_fullduplex() const
 	{
@@ -1043,8 +1057,10 @@ public:
 	}
 	void f_capture_fullduplex(bool a_value)
 	{
+		if (a_value == v_capture_fullduplex) return;
 		v_capture_fullduplex = a_value;
 		v_recognizer->f_notify();
+		if (v_options_changed) v_options_changed();
 	}
 	bool f_capture_force() const
 	{
@@ -1052,8 +1068,10 @@ public:
 	}
 	void f_capture_force(bool a_value)
 	{
+		if (a_value == v_capture_force) return;
 		v_capture_force = a_value;
 		v_recognizer->f_notify();
+		if (v_options_changed) v_options_changed();
 	}
 	bool f_expecting_speech() const
 	{

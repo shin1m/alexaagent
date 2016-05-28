@@ -1,7 +1,7 @@
 #ifndef ALEXAAGENT__JSON_H
 #define ALEXAAGENT__JSON_H
 
-#include "picojson.h"
+#include <picojson/picojson.h>
 
 template<typename T>
 struct t_get
