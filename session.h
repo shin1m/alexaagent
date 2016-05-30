@@ -37,8 +37,9 @@ class t_session
 		{
 			while (true) {
 				while (v_directives.empty()) v_task.f_wait();
-				v_directives.front()();
+				auto directive = std::move(v_directives.front());
 				v_directives.pop_front();
+				directive();
 			}
 		}
 		void f_loop(t_audio_decoder& a_decoder)
@@ -700,6 +701,12 @@ class t_session
 			v_content->v_task.f_notify();
 		}
 	}
+	void f_playback_event(const std::string& a_name)
+	{
+		auto metadata = f_metadata("PlaybackController", a_name, {});
+		metadata << "context" & f_context();
+		f_event(metadata);
+	}
 	void f_speaker_event(const std::string& a_name)
 	{
 		f_event(f_metadata("Speaker", a_name, {
@@ -1013,6 +1020,10 @@ public:
 		v_content_can_play_in_background = a_value;
 		if (v_options_changed) v_options_changed();
 	}
+	bool f_content_playing() const
+	{
+		return !v_content->v_playing.empty();
+	}
 	long f_speaker_volume() const
 	{
 		return v_speaker_volume;
@@ -1020,6 +1031,22 @@ public:
 	bool f_speaker_muted() const
 	{
 		return v_speaker_muted;
+	}
+	void f_playback_play()
+	{
+		f_playback_event("PlayCommandIssued");
+	}
+	void f_playback_pause()
+	{
+		f_playback_event("PauseCommandIssued");
+	}
+	void f_playback_next()
+	{
+		f_playback_event("NextCommandIssued");
+	}
+	void f_playback_previous()
+	{
+		f_playback_event("PreviousCommandIssued");
 	}
 	size_t f_capture_threshold() const
 	{

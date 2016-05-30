@@ -33,6 +33,22 @@ void f_web_socket(t_session* a_session, T_server& a_server)
 		{"background", [&](auto a_x)
 		{
 			a_session->f_content_can_play_in_background(a_x.template get<bool>());
+		}},
+		{"play", [&](auto)
+		{
+			a_session->f_playback_play();
+		}},
+		{"pause", [&](auto)
+		{
+			a_session->f_playback_pause();
+		}},
+		{"next", [&](auto)
+		{
+			a_session->f_playback_next();
+		}},
+		{"previous", [&](auto)
+		{
+			a_session->f_playback_previous();
 		}}
 	};
 	auto& ws = a_server.endpoint["^/session$"];
@@ -68,6 +84,9 @@ void f_web_socket(t_session* a_session, T_server& a_server)
 			{"dialog", picojson::value(picojson::value::object{
 				{"active", picojson::value(a_session->f_dialog_active())},
 				{"expecting_speech", picojson::value(a_session->f_expecting_speech())}
+			})},
+			{"content", picojson::value(picojson::value::object{
+				{"playing", picojson::value(a_session->f_content_playing())}
 			})},
 			{"speaker", picojson::value(picojson::value::object{
 				{"volume", picojson::value(static_cast<double>(a_session->f_speaker_volume()))},

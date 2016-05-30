@@ -50,22 +50,8 @@ body {
   height: 1em;
   background: linear-gradient(lightblue, slateblue);
 }
-#speaker {
-  position: relative;
-  height: 1em;
-  border: solid 0.25em transparent;
-  font-size: 10vh;
-}
-#speaker.active {
-  border: solid 0.25em lightblue;
-}
-#speaker-volume {
-  position: absolute;
-  height: 1em;
-  background: linear-gradient(lightblue, slateblue);
-}
-#speaker-volume.muted {
-  background-color: lightgray;
+#recognizer {
+  padding: 1em;
 }
 #recognize {
   border: solid 0.25em khaki;
@@ -79,6 +65,36 @@ body {
 }
 #recognize.active {
   border: solid 0.25em lightblue;
+}
+#speaker {
+  position: relative;
+  height: 1em;
+  border: solid 0.25em transparent;
+  font-size: 10vh;
+}
+#speaker.playing {
+  border: solid 0.25em lightblue;
+}
+#speaker-volume {
+  position: absolute;
+  height: 1em;
+  background: linear-gradient(lightblue, slateblue);
+}
+#speaker-volume.muted {
+  background-color: lightgray;
+}
+#playback {
+  padding: 1em;
+}
+#playback button {
+  border: solid 0.25em darkgray;
+  border-radius: 2vh;
+  background: linear-gradient(lightgray, gray);
+  padding: 2vh;
+  font-size: 5vh;
+}
+#playback button:active {
+  background: linear-gradient(gray, lightgray);
 }
 #options {
   padding: 1em;
@@ -97,19 +113,30 @@ document.addEventListener("DOMContentLoaded", function() {
   var recognize = document.getElementById("recognize");
   var speaker = document.getElementById("speaker");
   var speaker_volume = document.getElementById("speaker-volume");
+  var play = document.getElementById("play");
+  var pause = document.getElementById("pause");
+  var next = document.getElementById("next");
+  var previous = document.getElementById("previous");
   var ws = new WebSocket("wss://localhost:3002/session");
   var send = function(json) {
     ws.send(JSON.stringify(json));
+  };
+  var check_sender = function(name, checkbox) {
+    return function() {
+      var json = {};
+      json[name] = checkbox.checked;
+      send(json);
+    };
   };
   var fixed_sender = function(json) {
     return function() {
       send(json);
     };
   };
-  var check_sender = function(name, checkbox) {
+  var empty_sender = function(name) {
     return function() {
       var json = {};
-      json[name] = checkbox.checked;
+      json[name] = null;
       send(json);
     };
   };
@@ -124,11 +151,11 @@ document.addEventListener("DOMContentLoaded", function() {
       capture.className = state.capture.busy ? "busy" : "";
       capture_integral0.style.width = (state.capture.integral / 1024) + '%';
       capture_integral1.style.width = (Math.min(state.capture.integral, threshold) / 1024) + '%';
-      speaker.className = state.dialog.active ? "active" : "";
-      speaker_volume.style.width = state.speaker.volume + '%';
-      speaker_volume.className = state.speaker.muted ? "muted" : "";
       recognize.className = state.dialog.active ? "active" : "";
       recognize.innerText = state.dialog.expecting_speech ? "Speak" : "Recognize";
+      speaker.className = state.content.playing ? "playing" : "";
+      speaker_volume.style.width = state.speaker.volume + '%';
+      speaker_volume.className = state.speaker.muted ? "muted" : "";
     }
     var options = data.options_changed;
     if (options !== undefined) {
@@ -139,16 +166,20 @@ document.addEventListener("DOMContentLoaded", function() {
       content_background.checked = options.content.can_play_in_background;
     }
   };
-  recognize.addEventListener("mousedown", fixed_sender({force: true}), false);
-  recognize.addEventListener("mouseup", fixed_sender({force: false}), false);
-  recognize.addEventListener("keydown", fixed_sender({force: true}), false);
-  recognize.addEventListener("keyup", fixed_sender({force: false}), false);
   capture_threshold.addEventListener("change", function() {
     send({threshold: parseInt(capture_threshold.value)});
   }, false);
   capture_auto.addEventListener("change", check_sender("auto", capture_auto), false);
   capture_fullduplex.addEventListener("change", check_sender("fullduplex", capture_fullduplex), false);
   content_background.addEventListener("change", check_sender("background", content_background), false);
+  recognize.addEventListener("mousedown", fixed_sender({force: true}), false);
+  recognize.addEventListener("mouseup", fixed_sender({force: false}), false);
+  recognize.addEventListener("keydown", fixed_sender({force: true}), false);
+  recognize.addEventListener("keyup", fixed_sender({force: false}), false);
+  play.addEventListener("click", empty_sender("play"), false);
+  pause.addEventListener("click", empty_sender("pause"), false);
+  next.addEventListener("click", empty_sender("next"), false);
+  previous.addEventListener("click", empty_sender("previous"), false);
 }, false);
 </script>
 </head>
@@ -161,10 +192,18 @@ document.addEventListener("DOMContentLoaded", function() {
 <div id="capture-integral1"></div>
 <input id="capture-threshold" type="range" max="102400">
 </div>
+<div id="recognizer">
+<button id="recognize" autofocus>Recognize</button>
+</div>
 <div id="speaker">
 <div id="speaker-volume"></div>
 </div>
-<button id="recognize" autofocus>Recognize</button>
+<div id="playback">
+<button id="play">Play</button>
+<button id="pause">Pause</button>
+<button id="next">Next</button>
+<button id="previous">Previous</button>
+</div>
 <div id="options">
 <label for="capture-auto"><input id="capture-auto" type="checkbox">Capture Auto</label>
 <label for="capture-fullduplex"><input id="capture-fullduplex" type="checkbox">Capture Full Duplex</label>
