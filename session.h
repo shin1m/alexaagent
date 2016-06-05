@@ -434,7 +434,6 @@ class t_session
 	std::chrono::steady_clock::time_point v_capture_exceeded;
 	bool v_capture_busy = false;
 	bool v_capture_auto = true;
-	bool v_capture_fullduplex = false;
 	bool v_capture_force = false;
 	std::function<void()> v_expecting_speech;
 	boost::asio::steady_timer* v_expecting_timeout = nullptr;
@@ -772,7 +771,7 @@ class t_session
 	{
 		while (true) {
 			if (!a_busy && !v_expecting_timeout && v_expecting_speech) v_expecting_speech();
-			if ((v_capture_busy && v_capture_auto && v_dialog->v_playing.empty() && (v_capture_fullduplex || v_content->v_playing.empty()) || v_capture_force) != a_busy) return false;
+			if ((v_capture_busy && v_capture_auto && v_dialog->v_playing.empty() && (v_content->v_playing.empty()) || v_capture_force) != a_busy) return false;
 			ALCint n;
 			alcGetIntegerv(a_device, ALC_CAPTURE_SAMPLES, 1, &n);
 			if (n >= 160) break;
@@ -1010,6 +1009,10 @@ public:
 	{
 		return v_dialog_active;
 	}
+	bool f_dialog_playing() const
+	{
+		return !v_dialog->v_playing.empty();
+	}
 	bool f_content_can_play_in_background() const
 	{
 		return v_content_can_play_in_background;
@@ -1075,17 +1078,6 @@ public:
 	{
 		if (a_value == v_capture_auto) return;
 		v_capture_auto = a_value;
-		v_recognizer->f_notify();
-		if (v_options_changed) v_options_changed();
-	}
-	bool f_capture_fullduplex() const
-	{
-		return v_capture_fullduplex;
-	}
-	void f_capture_fullduplex(bool a_value)
-	{
-		if (a_value == v_capture_fullduplex) return;
-		v_capture_fullduplex = a_value;
 		v_recognizer->f_notify();
 		if (v_options_changed) v_options_changed();
 	}

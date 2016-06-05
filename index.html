@@ -1,122 +1,86 @@
 <html>
 <head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Alexa Voice Service Agent</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+<link rel="stylesheet" href="https://code.getmdl.io/1.1.3/material.light_blue-blue.min.css">
+<script defer src="https://code.getmdl.io/1.1.3/material.min.js"></script>
 <style>
-html {
-  width: 100%;
-  height: 100%;
+.flex-container {
+  display: flex;
+  align-items: center;
 }
-body {
-  margin: 0em;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
+.flex-cell {
+  flex: 1;
 }
-.table {
-  display: table;
-  width: 100%;
-  height: 100%;
+#capture i {
+  color: dodgerblue;
 }
-.content {
-  display: table-cell;
-  width: 100%;
-  text-align: center;
-  vertical-align: middle;
+#capture.busy i {
+  color: orange;
 }
-#capture {
+#capture .indicator, #speaker .indicator {
+  margin: 0 26 0 26;
   position: relative;
   height: 1em;
-  border: solid 0.25em transparent;
-  font-size: 10vh;
+  font-size: 1vh;
 }
-#capture.busy {
-  border: solid 0.25em lightblue;
-}
-#capture-threshold {
-  position: absolute;
-  margin: 0em;
-  left: 0em;
-  top: 0.5em;
-  width: 100%;
-  font-size: inherit;
-}
-#capture-integral0 {
+#capture .integral0 {
   position: absolute;
   height: 1em;
-  background: linear-gradient(pink, red);
+  background-color: orange;
 }
-#capture-integral1 {
+#capture .integral1 {
   position: absolute;
   height: 1em;
-  background: linear-gradient(lightblue, slateblue);
+  background-color: dodgerblue;
 }
-#recognizer {
-  padding: 1em;
+#recognizer.active i {
+  color: orange;
 }
-#recognize {
-  border: solid 0.25em khaki;
-  border-radius: 5vh;
-  background: linear-gradient(yellow, orange);
-  padding: 5vh;
-  font-size: 10vh;
+#speaker i {
+  color: dodgerblue;
 }
-#recognize:active {
-  background: linear-gradient(orange, yellow);
+#speaker.playing i {
+  color: orange;
 }
-#recognize.active {
-  border: solid 0.25em lightblue;
-}
-#speaker {
-  position: relative;
-  height: 1em;
-  border: solid 0.25em transparent;
-  font-size: 10vh;
-}
-#speaker.playing {
-  border: solid 0.25em lightblue;
+#speaker.muted {
+  background-color: lightgray;
 }
 #speaker-volume {
   position: absolute;
   height: 1em;
-  background: linear-gradient(lightblue, slateblue);
+  background-color: dodgerblue;
 }
-#speaker-volume.muted {
-  background-color: lightgray;
-}
-#playback {
-  padding: 1em;
-}
-#playback button {
-  border: solid 0.25em darkgray;
-  border-radius: 2vh;
-  background: linear-gradient(lightgray, gray);
-  padding: 2vh;
-  font-size: 5vh;
-}
-#playback button:active {
-  background: linear-gradient(gray, lightgray);
-}
-#options {
-  padding: 1em;
-  font-size: 4vh;
+#recognizer, #playback {
+  text-align: center;
 }
 </style>
 <script>
 document.addEventListener("DOMContentLoaded", function() {
   var capture = document.getElementById("capture");
-  var capture_threshold = document.getElementById("capture-threshold");
-  var capture_integral0 = document.getElementById("capture-integral0");
-  var capture_integral1 = document.getElementById("capture-integral1");
-  var capture_auto = document.getElementById("capture-auto");
-  var capture_fullduplex = document.getElementById("capture-fullduplex");
-  var content_background = document.getElementById("content-background");
-  var recognize = document.getElementById("recognize");
+  var capture_threshold = capture.querySelector(".threshold");
+  var capture_integral0 = capture.querySelector(".integral0");
+  var capture_integral1 = capture.querySelector(".integral1");
+  var recognizer = document.getElementById("recognizer");
+  var recognize = recognizer.querySelector("button");
+  var recognize_status = recognizer.querySelector(".status");
+  var recognize_prompt = recognizer.querySelector(".prompt");
   var speaker = document.getElementById("speaker");
+  var speaker_icon = document.getElementById("speaker-icon");
   var speaker_volume = document.getElementById("speaker-volume");
-  var play = document.getElementById("play");
-  var pause = document.getElementById("pause");
-  var next = document.getElementById("next");
-  var previous = document.getElementById("previous");
+  var playback = document.getElementById("playback");
+  var play = playback.querySelector(".play");
+  var pause = playback.querySelector(".pause");
+  var next = playback.querySelector(".next");
+  var previous = playback.querySelector(".previous");
+  var options = document.getElementById("options");
+  var capture_auto = options.querySelector(".capture-auto input");
+  var content_background = options.querySelector(".content-background input");
+  var notification = document.querySelector(".mdl-js-snackbar");
+  var toast = function(message) {
+    notification.MaterialSnackbar.showSnackbar({message: message});
+  };
   var ws = new WebSocket("wss://localhost:3002/session");
   var send = function(json) {
     ws.send(JSON.stringify(json));
@@ -141,6 +105,19 @@ document.addEventListener("DOMContentLoaded", function() {
     };
   };
   ws.onopen = function() {
+    capture_threshold.addEventListener("change", function() {
+      send({threshold: parseInt(capture_threshold.value)});
+    }, false);
+    recognize.addEventListener("mousedown", fixed_sender({force: true}), false);
+    recognize.addEventListener("mouseup", fixed_sender({force: false}), false);
+    recognize.addEventListener("keydown", fixed_sender({force: true}), false);
+    recognize.addEventListener("keyup", fixed_sender({force: false}), false);
+    play.addEventListener("click", empty_sender("play"), false);
+    pause.addEventListener("click", empty_sender("pause"), false);
+    next.addEventListener("click", empty_sender("next"), false);
+    previous.addEventListener("click", empty_sender("previous"), false);
+    capture_auto.addEventListener("change", check_sender("auto", capture_auto), false);
+    content_background.addEventListener("change", check_sender("background", content_background), false);
     send({hello: null});
   };
   var threshold;
@@ -148,69 +125,80 @@ document.addEventListener("DOMContentLoaded", function() {
     var data = JSON.parse(event.data);
     var state = data.state_changed;
     if (state !== undefined) {
-      capture.className = state.capture.busy ? "busy" : "";
+      capture.classList[state.capture.busy ? "add" : "remove"]("busy");
       capture_integral0.style.width = (state.capture.integral / 1024) + '%';
       capture_integral1.style.width = (Math.min(state.capture.integral, threshold) / 1024) + '%';
-      recognize.className = state.dialog.active ? "active" : "";
-      recognize.innerText = state.dialog.expecting_speech ? "Speak" : "Recognize";
-      speaker.className = state.content.playing ? "playing" : "";
+      recognizer.classList[state.dialog.active ? "add" : "remove"]("active");
+      recognize_status.innerText = state.dialog.playing ? "record_voice_over" : "mic";
+      recognize_prompt.innerText = state.dialog.expecting_speech ? "help_online" : "";
+      speaker.classList[state.content.playing ? "add" : "remove"]("playing");
+      speaker_icon.innerText = state.speaker.muted ? "volume_off" : "volume_up";
       speaker_volume.style.width = state.speaker.volume + '%';
-      speaker_volume.className = state.speaker.muted ? "muted" : "";
     }
     var options = data.options_changed;
     if (options !== undefined) {
       threshold = options.capture.threshold;
-      capture_threshold.value = threshold;
-      capture_auto.checked = options.capture.auto;
-      capture_fullduplex.checked = options.capture.fullduplex;
-      content_background.checked = options.content.can_play_in_background;
+      capture_threshold.MaterialSlider.change(threshold);
+      capture_auto.parentElement.MaterialSwitch[options.capture.auto ? "on" : "off"]();
+      content_background.parentElement.MaterialSwitch[options.content.can_play_in_background ? "on" : "off"]();
     }
   };
-  capture_threshold.addEventListener("change", function() {
-    send({threshold: parseInt(capture_threshold.value)});
-  }, false);
-  capture_auto.addEventListener("change", check_sender("auto", capture_auto), false);
-  capture_fullduplex.addEventListener("change", check_sender("fullduplex", capture_fullduplex), false);
-  content_background.addEventListener("change", check_sender("background", content_background), false);
-  recognize.addEventListener("mousedown", fixed_sender({force: true}), false);
-  recognize.addEventListener("mouseup", fixed_sender({force: false}), false);
-  recognize.addEventListener("keydown", fixed_sender({force: true}), false);
-  recognize.addEventListener("keyup", fixed_sender({force: false}), false);
-  play.addEventListener("click", empty_sender("play"), false);
-  pause.addEventListener("click", empty_sender("pause"), false);
-  next.addEventListener("click", empty_sender("next"), false);
-  previous.addEventListener("click", empty_sender("previous"), false);
 }, false);
 </script>
 </head>
 <body>
-<div>
-<div class="table">
-<div class="content">
-<div id="capture">
-<div id="capture-integral0"></div>
-<div id="capture-integral1"></div>
-<input id="capture-threshold" type="range" max="102400">
+<div class="mdl-layout mdl-js-layout">
+  <main class="mdl-layout__content">
+    <div class="mdl-grid">
+      <div id="capture" class="mdl-cell mdl-cell--12-col flex-container">
+        <i class="material-icons">mic</i>
+        <div class="flex-cell">
+          <div class="indicator">
+            <div class="integral0"></div>
+            <div class="integral1"></div>
+          </div>
+          <input class="mdl-slider mdl-js-slider threshold" type="range" max="102400">
+        </div>
+      </div>
+      <div id="recognizer" class="mdl-cell mdl-cell--12-col">
+        <button class="mdl-button mdl-js-button mdl-button--raised mdl-js-ripple-effect" autofocus>
+          <i class="material-icons status">record_voice_over</i><i class="material-icons prompt"></i>
+        </button>
+      </div>
+      <div id="speaker" class="mdl-cell mdl-cell--12-col flex-container">
+        <i id="speaker-icon" class="material-icons">volume_up</i>
+        <div class="flex-cell">
+          <div class="indicator">
+            <div id="speaker-volume"></div>
+          </div>
+        </div>
+      </div>
+      <div id="playback" class="mdl-cell mdl-cell--12-col">
+        <button class="mdl-button mdl-js-button mdl-js-ripple-effect previous"><i class="material-icons">skip_previous</i></button>
+        <button class="mdl-button mdl-js-button mdl-js-ripple-effect pause"><i class="material-icons">pause</i></button>
+        <button class="mdl-button mdl-js-button mdl-js-ripple-effect play"><i class="material-icons">play_arrow</i></button>
+        <button class="mdl-button mdl-js-button mdl-js-ripple-effect next"><i class="material-icons">skip_next</i></button>
+      </div>
+      <div id="options" class="mdl-cell mdl-cell--4-col mdl-cell--4-offset">
+        <div class="mdl-cell mdl-cell--12-col">
+          <label class="mdl-switch mdl-js-switch mdl-js-ripple-effect capture-auto">
+            <input type="checkbox" class="mdl-switch__input">
+            <span class="mdl-switch__label">Capture Auto</span>
+          </label>
+        </div>
+        <div class="mdl-cell mdl-cell--12-col">
+          <label class="mdl-switch mdl-js-switch mdl-js-ripple-effect content-background">
+            <input type="checkbox" class="mdl-switch__input">
+            <span class="mdl-switch__label">Content Can Play In Background</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  </main>
 </div>
-<div id="recognizer">
-<button id="recognize" autofocus>Recognize</button>
-</div>
-<div id="speaker">
-<div id="speaker-volume"></div>
-</div>
-<div id="playback">
-<button id="play">Play</button>
-<button id="pause">Pause</button>
-<button id="next">Next</button>
-<button id="previous">Previous</button>
-</div>
-<div id="options">
-<label for="capture-auto"><input id="capture-auto" type="checkbox">Capture Auto</label>
-<label for="capture-fullduplex"><input id="capture-fullduplex" type="checkbox">Capture Full Duplex</label>
-<label for="content-background"><input id="content-background" type="checkbox">Content Can Play In Background</label>
-</div>
-</div>
-</div>
+<div class="mdl-snackbar mdl-js-snackbar">
+  <div class="mdl-snackbar__text"></div>
+  <button class="mdl-snackbar__action"></button>
 </div>
 </body>
 </html>

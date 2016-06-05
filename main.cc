@@ -22,10 +22,6 @@ void f_web_socket(t_session* a_session, T_server& a_server)
 		{
 			a_session->f_capture_auto(a_x.template get<bool>());
 		}},
-		{"fullduplex", [&](auto a_x)
-		{
-			a_session->f_capture_fullduplex(a_x.template get<bool>());
-		}},
 		{"force", [&](auto a_x)
 		{
 			a_session->f_capture_force(a_x.template get<bool>());
@@ -83,6 +79,7 @@ void f_web_socket(t_session* a_session, T_server& a_server)
 		send("state_changed", {
 			{"dialog", picojson::value(picojson::value::object{
 				{"active", picojson::value(a_session->f_dialog_active())},
+				{"playing", picojson::value(a_session->f_dialog_playing())},
 				{"expecting_speech", picojson::value(a_session->f_expecting_speech())}
 			})},
 			{"content", picojson::value(picojson::value::object{
@@ -107,7 +104,6 @@ void f_web_socket(t_session* a_session, T_server& a_server)
 			{"capture", picojson::value(picojson::value::object{
 				{"threshold", picojson::value(static_cast<double>(a_session->f_capture_threshold()))},
 				{"auto", picojson::value(a_session->f_capture_auto())},
-				{"fullduplex", picojson::value(a_session->f_capture_fullduplex())},
 				{"force", picojson::value(a_session->f_capture_force())}
 			})}
 		});
