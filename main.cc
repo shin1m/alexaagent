@@ -4,10 +4,8 @@
 #include "session.h"
 #include "tiny_http.h"
 
-#define ALEXAAGENT_TLS
-
 template<typename T_server>
-void f_web_socket(t_session* a_session, T_server& a_server)
+void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 {
 	std::map<std::string, std::function<void(const picojson::value&)>> handlers{
 		{"hello", [&](auto a_x)
@@ -47,7 +45,7 @@ void f_web_socket(t_session* a_session, T_server& a_server)
 			a_session->f_playback_previous();
 		}}
 	};
-	auto& ws = a_server.endpoint["^/session$"];
+	auto& ws = a_server->endpoint["^/session$"];
 	ws.onmessage = [&](auto a_connection, auto a_message)
 	{
 		auto s = a_message->string();
@@ -68,10 +66,10 @@ void f_web_socket(t_session* a_session, T_server& a_server)
 		auto message = picojson::value(picojson::value::object{
 			{a_name, picojson::value(std::move(a_values))}
 		}).serialize();
-		for (auto& x : a_server.get_connections()) {
+		for (auto& x : a_server->get_connections()) {
 			auto s = std::make_shared<typename T_server::SendStream>();
 			*s << message;
-			a_server.send(x, s);
+			a_server->send(x, s);
 		}
 	};
 	a_session->v_state_changed = [&]
@@ -108,7 +106,7 @@ void f_web_socket(t_session* a_session, T_server& a_server)
 			})}
 		});
 	};
-	a_server.start();
+	a_server->start();
 }
 
 int main(int argc, char* argv[])
@@ -119,6 +117,8 @@ int main(int argc, char* argv[])
 		s >> configuration;
 	}
 	auto profile = configuration / "profile";
+	auto service = configuration / "service";
+	auto service_key = service * "key" | std::string();
 	auto sounds = configuration / "sounds";
 	av_register_all();
 	avformat_network_init();
@@ -134,13 +134,9 @@ int main(int argc, char* argv[])
 	nghttp2::asio_http2::server::http2 server;
 	std::unique_ptr<t_scheduler> scheduler;
 	std::unique_ptr<t_session> session;
-#ifdef ALEXAAGENT_TLS
-	SimpleWeb::SocketServer<SimpleWeb::WSS> wsserver(3002, 1, "configuration/server.crt", "configuration/server.key");
-#else
-	SimpleWeb::SocketServer<SimpleWeb::WS> wsserver(3002);
-#endif
 	std::thread wsthread;
-	std::function<void(const std::string&)> f_refresh;
+	std::function<void()> wsstop;
+	std::function<void(const std::string&)> refresh;
 	auto grant = [&](std::map<std::string, std::string>&& a_query, std::function<void()> a_done)
 	{
 		a_query.emplace("client_id", profile / "client_id"_jss);
@@ -161,11 +157,25 @@ int main(int argc, char* argv[])
 					session->f_token(access_token);
 				} else {
 					session.reset(new t_session(*scheduler, access_token, sounds));
-					wsthread = std::thread(std::bind(f_web_socket<decltype(wsserver)>, session.get(), std::ref(wsserver)));
+					if (service_key.empty()) {
+						auto server = std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WS>>(service / "websocket"_jsn);
+						wsthread = std::thread(std::bind(f_web_socket<decltype(server)::element_type>, session.get(), server));
+						wsstop = [server]
+						{
+							server->stop();
+						};
+					} else {
+						auto server = std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WSS>>(service / "websocket"_jsn, 1, service / "certificate"_jss, service_key);
+						wsthread = std::thread(std::bind(f_web_socket<decltype(server)::element_type>, session.get(), server));
+						wsstop = [server]
+						{
+							server->stop();
+						};
+					}
 				}
 				scheduler->f_run_in(std::chrono::seconds(expires_in), [&, refresh_token](auto)
 				{
-					f_refresh(refresh_token);
+					refresh(refresh_token);
 				});
 			}
 			a_done();
@@ -175,7 +185,7 @@ int main(int argc, char* argv[])
 			a_done();
 		});
 	};
-	f_refresh = [&](const std::string& a_token)
+	refresh = [&](const std::string& a_token)
 	{
 		grant({
 			{"grant_type", "refresh_token"},
@@ -220,27 +230,27 @@ int main(int argc, char* argv[])
 			}, f);
 	});
 	boost::system::error_code ec;
-#ifdef ALEXAAGENT_TLS
-	boost::asio::ssl::context tls(boost::asio::ssl::context::tlsv12);
-	tls.use_private_key_file("configuration/server.key", boost::asio::ssl::context::pem);
-	tls.use_certificate_chain_file("configuration/server.crt");
-	nghttp2::asio_http2::server::configure_tls_context_easy(ec, tls);
-	if (server.listen_and_serve(ec, tls, "localhost", "3000", true)) throw std::runtime_error(ec.message());
-#else
-	if (server.listen_and_serve(ec, "localhost", "3001", true)) throw std::runtime_error(ec.message());
-#endif
+	if (service_key.empty()) {
+		if (server.listen_and_serve(ec, service / "host"_jss, std::to_string(service / "http2"_jsn), true)) throw std::runtime_error(ec.message());
+	} else {
+		boost::asio::ssl::context tls(boost::asio::ssl::context::tlsv12);
+		tls.use_private_key_file(service_key, boost::asio::ssl::context::pem);
+		tls.use_certificate_chain_file(service / "certificate"_jss);
+		nghttp2::asio_http2::server::configure_tls_context_easy(ec, tls);
+		if (server.listen_and_serve(ec, tls, service / "host"_jss, std::to_string(static_cast<int>(service / "http2"_jsn)), true)) throw std::runtime_error(ec.message());
+	}
 	scheduler.reset(new t_scheduler(*server.io_services().front()));
 	boost::asio::signal_set signals(*server.io_services().front(), SIGINT);
 	signals.async_wait([&](auto, auto a_signal)
 	{
 		std::fprintf(stderr, "\ncaught signal: %d\n", a_signal);
 		scheduler->f_shutdown(std::bind(&nghttp2::asio_http2::server::http2::stop, std::ref(server)));
-		if (wsthread.joinable()) wsserver.stop();
+		if (wsstop) wsstop();
 	});
 	{
 		std::string token;
 		std::ifstream("session/token") >> token;
-		if (!token.empty()) f_refresh(token);
+		if (!token.empty()) refresh(token);
 	}
 	server.join();
 	wsthread.join();
