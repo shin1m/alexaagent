@@ -81,68 +81,73 @@ document.addEventListener("DOMContentLoaded", function() {
   var toast = function(message) {
     notification.MaterialSnackbar.showSnackbar({message: message});
   };
-  var ws = new WebSocket("wss://localhost:3002/session");
-  var send = function(json) {
-    ws.send(JSON.stringify(json));
-  };
-  var check_sender = function(name, checkbox) {
-    return function() {
-      var json = {};
-      json[name] = checkbox.checked;
-      send(json);
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", "session");
+  xhr.onload = function() {
+    var ws = new WebSocket(xhr.responseText);
+    var send = function(json) {
+      ws.send(JSON.stringify(json));
+    };
+    var put = function(json, name, value) {
+      json[name] = value;
+      return json;
+    };
+    var check_sender = function(name, checkbox) {
+      return function() {
+        send(put({}, name, checkbox.checked));
+      };
+    };
+    var fixed_sender = function(json) {
+      return function() {
+        send(json);
+      };
+    };
+    var empty_sender = function(name) {
+      return function() {
+        send(put({}, name, null));
+      };
+    };
+    ws.onopen = function() {
+      capture_threshold.addEventListener("change", function() {
+        send({threshold: parseInt(capture_threshold.value)});
+      }, false);
+      recognize.addEventListener("mousedown", fixed_sender({force: true}), false);
+      recognize.addEventListener("mouseup", fixed_sender({force: false}), false);
+      recognize.addEventListener("keydown", fixed_sender({force: true}), false);
+      recognize.addEventListener("keyup", fixed_sender({force: false}), false);
+      play.addEventListener("click", empty_sender("play"), false);
+      pause.addEventListener("click", empty_sender("pause"), false);
+      next.addEventListener("click", empty_sender("next"), false);
+      previous.addEventListener("click", empty_sender("previous"), false);
+      capture_auto.addEventListener("change", check_sender("auto", capture_auto), false);
+      content_background.addEventListener("change", check_sender("background", content_background), false);
+      send({hello: null});
+    };
+    var threshold;
+    ws.onmessage = function(event) {
+      var data = JSON.parse(event.data);
+      var state = data.state_changed;
+      if (state !== undefined) {
+        capture.classList[state.capture.busy ? "add" : "remove"]("busy");
+        capture_integral0.style.width = (state.capture.integral / 1024) + '%';
+        capture_integral1.style.width = (Math.min(state.capture.integral, threshold) / 1024) + '%';
+        recognizer.classList[state.dialog.active ? "add" : "remove"]("active");
+        recognize_status.innerText = state.dialog.playing ? "record_voice_over" : "mic";
+        recognize_prompt.innerText = state.dialog.expecting_speech ? "help_online" : "";
+        speaker.classList[state.content.playing ? "add" : "remove"]("playing");
+        speaker_icon.innerText = state.speaker.muted ? "volume_off" : "volume_up";
+        speaker_volume.style.width = state.speaker.volume + '%';
+      }
+      var options = data.options_changed;
+      if (options !== undefined) {
+        threshold = options.capture.threshold;
+        capture_threshold.MaterialSlider.change(threshold);
+        capture_auto.parentElement.MaterialSwitch[options.capture.auto ? "on" : "off"]();
+        content_background.parentElement.MaterialSwitch[options.content.can_play_in_background ? "on" : "off"]();
+      }
     };
   };
-  var fixed_sender = function(json) {
-    return function() {
-      send(json);
-    };
-  };
-  var empty_sender = function(name) {
-    return function() {
-      var json = {};
-      json[name] = null;
-      send(json);
-    };
-  };
-  ws.onopen = function() {
-    capture_threshold.addEventListener("change", function() {
-      send({threshold: parseInt(capture_threshold.value)});
-    }, false);
-    recognize.addEventListener("mousedown", fixed_sender({force: true}), false);
-    recognize.addEventListener("mouseup", fixed_sender({force: false}), false);
-    recognize.addEventListener("keydown", fixed_sender({force: true}), false);
-    recognize.addEventListener("keyup", fixed_sender({force: false}), false);
-    play.addEventListener("click", empty_sender("play"), false);
-    pause.addEventListener("click", empty_sender("pause"), false);
-    next.addEventListener("click", empty_sender("next"), false);
-    previous.addEventListener("click", empty_sender("previous"), false);
-    capture_auto.addEventListener("change", check_sender("auto", capture_auto), false);
-    content_background.addEventListener("change", check_sender("background", content_background), false);
-    send({hello: null});
-  };
-  var threshold;
-  ws.onmessage = function(event) {
-    var data = JSON.parse(event.data);
-    var state = data.state_changed;
-    if (state !== undefined) {
-      capture.classList[state.capture.busy ? "add" : "remove"]("busy");
-      capture_integral0.style.width = (state.capture.integral / 1024) + '%';
-      capture_integral1.style.width = (Math.min(state.capture.integral, threshold) / 1024) + '%';
-      recognizer.classList[state.dialog.active ? "add" : "remove"]("active");
-      recognize_status.innerText = state.dialog.playing ? "record_voice_over" : "mic";
-      recognize_prompt.innerText = state.dialog.expecting_speech ? "help_online" : "";
-      speaker.classList[state.content.playing ? "add" : "remove"]("playing");
-      speaker_icon.innerText = state.speaker.muted ? "volume_off" : "volume_up";
-      speaker_volume.style.width = state.speaker.volume + '%';
-    }
-    var options = data.options_changed;
-    if (options !== undefined) {
-      threshold = options.capture.threshold;
-      capture_threshold.MaterialSlider.change(threshold);
-      capture_auto.parentElement.MaterialSwitch[options.capture.auto ? "on" : "off"]();
-      content_background.parentElement.MaterialSwitch[options.content.can_play_in_background ? "on" : "off"]();
-    }
-  };
+  xhr.send();
 }, false);
 </script>
 </head>
@@ -162,7 +167,7 @@ document.addEventListener("DOMContentLoaded", function() {
       </div>
       <div id="recognizer" class="mdl-cell mdl-cell--12-col">
         <button class="mdl-button mdl-js-button mdl-button--raised mdl-js-ripple-effect" autofocus>
-          <i class="material-icons status">record_voice_over</i><i class="material-icons prompt"></i>
+          <i class="material-icons status">mic</i><i class="material-icons prompt"></i>
         </button>
       </div>
       <div id="speaker" class="mdl-cell mdl-cell--12-col flex-container">
