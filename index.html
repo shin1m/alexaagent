@@ -20,10 +20,10 @@
   color: orange;
 }
 #capture .indicator, #speaker .indicator {
+  font-size: 1vh;
   margin: 0 26 0 26;
   position: relative;
   height: 1em;
-  font-size: 1vh;
 }
 #capture .integral0 {
   position: absolute;
@@ -52,7 +52,21 @@
   height: 1em;
   background-color: dodgerblue;
 }
-#recognizer, #playback {
+#alerts div {
+  display: inline-flex;
+  align-items: center;
+  margin: 1em;
+}
+#alerts div.active {
+  color: orange;
+}
+#alerts i {
+  margin-right: 0.75em;
+}
+#alerts span {
+  font-size: 2em;
+}
+#recognizer, #playback, #alerts {
   text-align: center;
 }
 </style>
@@ -65,7 +79,6 @@ document.addEventListener("DOMContentLoaded", function() {
   var recognizer = document.getElementById("recognizer");
   var recognize = recognizer.querySelector("button");
   var recognize_status = recognizer.querySelector(".status");
-  var recognize_prompt = recognizer.querySelector(".prompt");
   var speaker = document.getElementById("speaker");
   var speaker_icon = document.getElementById("speaker-icon");
   var speaker_volume = document.getElementById("speaker-volume");
@@ -124,19 +137,69 @@ document.addEventListener("DOMContentLoaded", function() {
       send({hello: null});
     };
     var threshold;
+    var updateAlerts = function() {
+      var e = document.getElementById("alerts");
+      var alerts = [];
+      var pad = function(x) {
+        return (x < 10 ? "0" : "") + x;
+      };
+      var refresh = function() {
+        e.innerHTML = "";
+        for (var i = 0; i < alerts.length; ++i) {
+          var a = alerts[i];
+          var t;
+          if (a.type == "TIMER") {
+            var s = parseInt((a.at.getTime() - Date.now()) / 1000);
+            if (s < 0) {
+              t = "-";
+              s = -s;
+            } else {
+              t = "";
+            }
+            var tt = pad(parseInt(s / 60) % 60) + ':' + pad(s % 60);
+            var h = parseInt(s / 3600);
+            if (h > 0) {
+              tt = h + ':' + tt;
+              var d = parseInt(h / 24);
+              if (d > 0) tt = d + '.' + tt;
+            }
+            t += tt;
+          } else {
+            t = pad(a.at.getHours()) + ':' + a.at.getMinutes();
+            if (a.at.getTime() - Date.now() >= 24 * 60 * 60 * 1000) t = (a.at.getMonth() + 1) + '/' + a.at.getDate() + ' ' + t;
+          }
+          e.insertAdjacentHTML("beforeend", a.html + t + '</span></div>');
+        }
+      };
+      setInterval(refresh, 1000);
+      return function(source) {
+        alerts = [];
+        for (var i = 0; i < source.length; ++i) {
+          var a = source[i];
+          alerts.push({
+            type: a.type,
+            at: new Date(a.at),
+            html: '<div class="' + (a.active ? "active" : "") + '"><i class="material-icons">' + (a.type == "TIMER" ? "timer" : "alarm") + '</i><span>'
+          });
+        }
+        refresh();
+      };
+    }();
     ws.onmessage = function(event) {
       var data = JSON.parse(event.data);
+      if (data.capture !== undefined) {
+        capture.classList[data.capture.busy ? "add" : "remove"]("busy");
+        capture_integral0.style.width = (data.capture.integral / 1024) + '%';
+        capture_integral1.style.width = (Math.min(data.capture.integral, threshold) / 1024) + '%';
+      }
       var state = data.state_changed;
       if (state !== undefined) {
-        capture.classList[state.capture.busy ? "add" : "remove"]("busy");
-        capture_integral0.style.width = (state.capture.integral / 1024) + '%';
-        capture_integral1.style.width = (Math.min(state.capture.integral, threshold) / 1024) + '%';
         recognizer.classList[state.dialog.active ? "add" : "remove"]("active");
-        recognize_status.innerText = state.dialog.playing ? "record_voice_over" : "mic";
-        recognize_prompt.innerText = state.dialog.expecting_speech ? "help_online" : "";
+        recognize_status.innerText = state.dialog.expecting_speech ? "help" : state.dialog.playing ? "record_voice_over" : "mic";
         speaker.classList[state.content.playing ? "add" : "remove"]("playing");
         speaker_icon.innerText = state.speaker.muted ? "volume_off" : "volume_up";
         speaker_volume.style.width = state.speaker.volume + '%';
+        updateAlerts(state.alerts);
       }
       var options = data.options_changed;
       if (options !== undefined) {
@@ -167,7 +230,7 @@ document.addEventListener("DOMContentLoaded", function() {
       </div>
       <div id="recognizer" class="mdl-cell mdl-cell--12-col">
         <button class="mdl-button mdl-js-button mdl-button--raised mdl-js-ripple-effect" autofocus>
-          <i class="material-icons status">mic</i><i class="material-icons prompt"></i>
+          <i class="material-icons status">mic</i>
         </button>
       </div>
       <div id="speaker" class="mdl-cell mdl-cell--12-col flex-container">
@@ -184,6 +247,7 @@ document.addEventListener("DOMContentLoaded", function() {
         <button class="mdl-button mdl-js-button mdl-js-ripple-effect play"><i class="material-icons">play_arrow</i></button>
         <button class="mdl-button mdl-js-button mdl-js-ripple-effect next"><i class="material-icons">skip_next</i></button>
       </div>
+      <div id="alerts" class="mdl-cell mdl-cell--12-col"></div>
       <div id="options" class="mdl-cell mdl-cell--4-col mdl-cell--4-offset">
         <div class="mdl-cell mdl-cell--12-col">
           <label class="mdl-switch mdl-js-switch mdl-js-ripple-effect capture-auto">

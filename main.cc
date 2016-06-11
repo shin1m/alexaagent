@@ -10,6 +10,7 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 	std::map<std::string, std::function<void(const picojson::value&)>> handlers{
 		{"hello", [&](auto a_x)
 		{
+			a_session->v_state_changed();
 			a_session->v_options_changed();
 		}},
 		{"threshold", [&](auto a_x)
@@ -72,24 +73,35 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 			a_server->send(x, s);
 		}
 	};
+	a_session->v_capture = [&]
+	{
+		send("capture", {
+			{"integral", picojson::value(static_cast<double>(a_session->f_capture_integral()))},
+			{"busy", picojson::value(a_session->f_capture_busy())}
+		});
+	};
 	a_session->v_state_changed = [&]
 	{
+		picojson::value::array alerts;
+		for (auto& x : a_session->f_alerts()) alerts.push_back(picojson::value(picojson::value::object{
+			{"token", picojson::value(x.first)},
+			{"type", picojson::value(x.second.f_type())},
+			{"at", picojson::value(x.second.f_at())},
+			{"active", picojson::value(x.second.f_active())}
+		}));
 		send("state_changed", {
 			{"dialog", picojson::value(picojson::value::object{
 				{"active", picojson::value(a_session->f_dialog_active())},
 				{"playing", picojson::value(a_session->f_dialog_playing())},
 				{"expecting_speech", picojson::value(a_session->f_expecting_speech())}
 			})},
+			{"alerts", picojson::value(std::move(alerts))},
 			{"content", picojson::value(picojson::value::object{
 				{"playing", picojson::value(a_session->f_content_playing())}
 			})},
 			{"speaker", picojson::value(picojson::value::object{
 				{"volume", picojson::value(static_cast<double>(a_session->f_speaker_volume()))},
 				{"muted", picojson::value(a_session->f_speaker_muted())}
-			})},
-			{"capture", picojson::value(picojson::value::object{
-				{"integral", picojson::value(static_cast<double>(a_session->f_capture_integral()))},
-				{"busy", picojson::value(a_session->f_capture_busy())}
 			})}
 		});
 	};

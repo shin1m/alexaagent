@@ -55,8 +55,11 @@ class t_session
 			while (v_target.f_flush() > 0) v_task.f_wait(std::chrono::milliseconds(static_cast<int>(v_target.f_remain() * 250.0)));
 		}
 	};
-	struct t_alert
+public:
+	class t_alert
 	{
+		friend class t_session;
+
 		std::string v_type;
 		std::string v_at;
 		std::unique_ptr<boost::asio::system_timer> v_timer;
@@ -65,6 +68,9 @@ class t_session
 			alDeleteSources(1, a_x);
 		}};
 
+		t_alert(const std::string& a_type, const std::string& a_at) : v_type(a_type), v_at(a_at)
+		{
+		}
 		void f_play(ALuint a_buffer, ALfloat a_gain)
 		{
 			if (v_source) {
@@ -79,7 +85,22 @@ class t_session
 			alSourcef(*v_source, AL_GAIN, a_gain);
 			alSourcePlay(*v_source);
 		}
+
+	public:
+		const std::string& f_type() const
+		{
+			return v_type;
+		}
+		const std::string& f_at() const
+		{
+			return v_at;
+		}
+		bool f_active() const
+		{
+			return static_cast<bool>(v_source);
+		}
 	};
+private:
 	struct t_parser;
 	struct t_attached_audio
 	{
@@ -244,7 +265,9 @@ class t_session
 						v_expecting_timeout = nullptr;
 						this->f_empty_event("SpeechRecognizer", "ExpectSpeechTimedOut");
 						this->f_dialog_release();
+						if (v_state_changed) v_state_changed();
 					});
+					if (v_state_changed) v_state_changed();
 				};
 				do v_dialog->v_task.f_wait(); while (v_expecting_speech);
 			});
@@ -317,6 +340,7 @@ class t_session
 				v_content->v_target.f_reset();
 				v_content->v_playing = token;
 				this->f_player_event("PlaybackStarted");
+				if (v_state_changed) v_state_changed();
 				try {
 					std::unique_ptr<t_audio_source> source(open());
 					t_audio_decoder decoder(*source);
@@ -341,6 +365,7 @@ class t_session
 					}));
 				}
 				v_content->v_playing.clear();
+				if (v_state_changed) v_state_changed();
 			});
 			auto report = stream * "progressReport";
 			if (!report) return;
@@ -400,6 +425,7 @@ class t_session
 				v_dialog->v_target.f_reset();
 				v_dialog->v_playing = token;
 				f("SpeechStarted");
+				if (v_state_changed) v_state_changed();
 				try {
 					std::unique_ptr<t_audio_source> source( audio->f_open([] {}, [] {}));
 					t_audio_decoder decoder(*source);
@@ -411,6 +437,7 @@ class t_session
 				f("SpeechFinished");
 				v_dialog->v_playing.clear();
 				this->f_dialog_release();
+				if (v_state_changed) v_state_changed();
 			});
 		}},
 		{std::make_pair("System", "ResetUserInactivity"), [this](const picojson::value&)
@@ -460,7 +487,7 @@ class t_session
 				{"type", picojson::value(x.second.v_type)},
 				{"scheduledTime", picojson::value(x.second.v_at)}
 			});
-			if (x.second.v_source) active.push_back(alert);
+			if (x.second.f_active()) active.push_back(alert);
 			all.push_back(std::move(alert));
 		}
 		return picojson::value(picojson::value::array{
@@ -607,7 +634,7 @@ class t_session
 			f_alerts_event("AlertStopped", a_token);
 			return;
 		}
-		auto i = v_alerts.emplace(a_token, t_alert{a_type, a_at}).first;
+		auto i = v_alerts.emplace(a_token, t_alert(a_type, a_at)).first;
 		i->second.v_timer.reset(new boost::asio::system_timer(v_scheduler.f_io(), at));
 		i->second.v_timer->async_wait([this, i](auto a_ec)
 		{
@@ -630,6 +657,7 @@ class t_session
 					for (auto& x : v_alerts) if (x.second.v_source) return;
 					this->f_player_foreground();
 				});
+				if (v_state_changed) v_state_changed();
 			};
 			if (v_dialog_active)
 				f();
@@ -652,6 +680,7 @@ class t_session
 		};
 		std::ofstream s("session/alerts.json");
 		alerts.serialize(std::ostreambuf_iterator<char>(s), true);
+		if (v_state_changed) v_state_changed();
 	}
 	void f_player_event(const std::string& a_name)
 	{
@@ -712,6 +741,7 @@ class t_session
 			{"volume", picojson::value(static_cast<double>(v_speaker_volume))},
 			{"muted", picojson::value(v_speaker_muted)}
 		}));
+		if (v_state_changed) v_state_changed();
 	}
 	void f_speaker_apply()
 	{
@@ -786,7 +816,7 @@ class t_session
 		size_t m = v_capture_threshold / 1024;
 		size_t n = v_capture_integral / 1024;
 		std::fprintf(stderr, "%s: %s\x1b[K\r", v_capture_busy ? "BUSY" : "IDLE", (n > m ? std::string(m, '#') + std::string(std::min(n, size_t(72)) - m, '=') : std::string(n, '#') + std::string(m - n, ' ') + '|').c_str());
-		if (v_state_changed) v_state_changed();
+		if (v_capture) v_capture();
 		return true;
 	}
 	void f_recognizer()
@@ -815,6 +845,7 @@ class t_session
 			} else {
 				f_dialog_acquire(*v_recognizer);
 			}
+			if (v_state_changed) v_state_changed();
 			std::fprintf(stderr, "recognize started.\n");
 			deque.insert(deque.begin(), v_boundary_audio.begin(), v_boundary_audio.end());
 			{
@@ -874,6 +905,7 @@ class t_session
 				f_dialog_release();
 			}
 			v_last_activity = std::chrono::steady_clock::now();
+			if (v_state_changed) v_state_changed();
 		}
 	}
 	void f_load()
@@ -950,6 +982,7 @@ class t_session
 	}
 
 public:
+	std::function<void()> v_capture;
 	std::function<void()> v_state_changed;
 	std::function<void()> v_options_changed;
 
@@ -1012,6 +1045,10 @@ public:
 	bool f_dialog_playing() const
 	{
 		return !v_dialog->v_playing.empty();
+	}
+	const std::map<std::string, t_alert>& f_alerts() const
+	{
+		return v_alerts;
 	}
 	bool f_content_can_play_in_background() const
 	{
