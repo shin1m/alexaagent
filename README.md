@@ -9,10 +9,54 @@ It is written in C++.
 * [OpenAL](http://openal.org)
 * [FFmpeg](http://www.ffmpeg.org)
 * [Boost](http://www.boost.org)
-* [nghttp2](https://nghttp2.org)
+* [nghttp2](https://nghttp2.org) --enable-asio-lib is required.
 * [Simple-WebSocket-Server](https://github.com/eidheim/Simple-WebSocket-Server)
 * [PicoJSON](https://github.com/kazuho/picojson)
 * [Material Design Lite](https://getmdl.io)
+
+
+## How to Build
+
+    autoreconf -is
+    ./configure
+    make
+    make install
+
+
+## How to Setup
+
+### Register the Product with Alexa Voice Service
+
+Follow the Step 1 in the [Getting Started](https://developer.amazon.com/public/solutions/alexa/alexa-voice-service/getting-started-with-the-alexa-voice-service) page.
+
+### Configure the Product
+
+Make a private key and a certificate for accepting SSL/TLS connections.
+
+Prepare sound files for alerts.
+
+Make a directiory for session files.
+
+    mkdir session
+
+Edit session.json appropriately.
+
+    cp configuration/example.json configuration/session.json
+    vi configuration/session.json
+
+### Authorize the Product via Login With Amazon
+
+Open the URL of the product (e.g. https://localhost:3000 as in example.json) with a web browser.
+You will be redirected to the Login With Amazon page.
+
+Log in to Login With Amazon and authorize the product.
+You will be redirected back to the product and the console page will appear.
+
+
+## TODO
+
+* Separete the configuration into provider-side and user-side.
+* More instructions.
 
 
 ## License
