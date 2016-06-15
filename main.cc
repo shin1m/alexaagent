@@ -13,35 +13,43 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 			a_session->v_state_changed();
 			a_session->v_options_changed();
 		}},
-		{"threshold", [&](auto a_x)
+		{"capture.threshold", [&](auto a_x)
 		{
 			a_session->f_capture_threshold(a_x.template get<double>());
 		}},
-		{"auto", [&](auto a_x)
+		{"capture.auto", [&](auto a_x)
 		{
 			a_session->f_capture_auto(a_x.template get<bool>());
 		}},
-		{"force", [&](auto a_x)
+		{"capture.force", [&](auto a_x)
 		{
 			a_session->f_capture_force(a_x.template get<bool>());
 		}},
-		{"background", [&](auto a_x)
+		{"alerts.duration", [&](auto a_x)
+		{
+			a_session->f_alerts_duration(std::min(static_cast<size_t>(a_x.template get<double>()), size_t(3600)));
+		}},
+		{"alerts.stop", [&](auto a_x)
+		{
+			a_session->f_alerts_stop(a_x.template get<std::string>());
+		}},
+		{"content.background", [&](auto a_x)
 		{
 			a_session->f_content_can_play_in_background(a_x.template get<bool>());
 		}},
-		{"play", [&](auto)
+		{"playback.play", [&](auto)
 		{
 			a_session->f_playback_play();
 		}},
-		{"pause", [&](auto)
+		{"playback.pause", [&](auto)
 		{
 			a_session->f_playback_pause();
 		}},
-		{"next", [&](auto)
+		{"playback.next", [&](auto)
 		{
 			a_session->f_playback_next();
 		}},
-		{"previous", [&](auto)
+		{"playback.previous", [&](auto)
 		{
 			a_session->f_playback_previous();
 		}}
@@ -108,6 +116,9 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 	a_session->v_options_changed = [&]
 	{
 		send("options_changed", {
+			{"alerts", picojson::value(picojson::value::object{
+				{"duration", picojson::value(static_cast<double>(a_session->f_alerts_duration()))}
+			})},
 			{"content", picojson::value(picojson::value::object{
 				{"can_play_in_background", picojson::value(a_session->f_content_can_play_in_background())}
 			})},

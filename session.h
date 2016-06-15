@@ -449,6 +449,7 @@ private:
 	t_channel* v_dialog = nullptr;
 	bool v_dialog_active = false;
 	std::map<std::string, t_alert> v_alerts;
+	size_t v_alerts_duration = 60;
 	t_channel* v_content = nullptr;
 	bool v_content_can_play_in_background = false;
 	bool v_content_pausing = false;
@@ -487,7 +488,7 @@ private:
 				{"type", picojson::value(x.second.v_type)},
 				{"scheduledTime", picojson::value(x.second.v_at)}
 			});
-			if (x.second.f_active()) active.push_back(alert);
+			if (x.second.v_source) active.push_back(alert);
 			all.push_back(std::move(alert));
 		}
 		return picojson::value(picojson::value::array{
@@ -648,7 +649,9 @@ private:
 			{
 				i->second.f_play(v_sounds[(i->second.v_type == "TIMER" ? 0 : 2) + (v_dialog_active ? 1 : 0)], v_dialog_active ? 1.0f / 16.0f : 1.0f);
 				this->f_alerts_event("AlertStarted", i->first);
-				v_scheduler.f_run_in(std::chrono::seconds(10), [this, i](auto)
+				i->second.v_timer->expires_from_now(std::chrono::seconds(v_alerts_duration));
+				i->second.v_timer->async_wait([this, i](auto)
+				//v_scheduler.f_run_in(std::chrono::seconds(v_alerts_duration), [this, i](auto)
 				{
 					this->f_alerts_event("AlertStopped", i->first);
 					v_alerts.erase(i);
@@ -908,8 +911,30 @@ private:
 			if (v_state_changed) v_state_changed();
 		}
 	}
+	void f_options_save()
+	{
+		std::ofstream s("session/options.json");
+		picojson::value(picojson::value::object{
+			{"alerts_duration", picojson::value(static_cast<double>(v_alerts_duration))},
+			{"content_can_play_in_background", picojson::value(v_content_can_play_in_background)},
+			{"capture_threshold", picojson::value(static_cast<double>(v_capture_threshold))},
+			{"capture_auto", picojson::value(v_capture_auto)}
+		}).serialize(std::ostreambuf_iterator<char>(s), true);
+		if (v_options_changed) v_options_changed();
+	}
 	void f_load()
 	{
+		try {
+			picojson::value options;
+			std::ifstream s("session/options.json");
+			s >> options;
+			v_alerts_duration = options / "alerts_duration"_jsn;
+			v_content_can_play_in_background = options / "content_can_play_in_background"_jsb;
+			v_capture_threshold = options / "capture_threshold"_jsn;
+			v_capture_auto = options / "capture_auto"_jsb;
+		} catch (std::exception& e) {
+			f_exception_encountered(std::string(), "INTERNAL_ERROR", e);
+		}
 		try {
 			picojson::value alerts;
 			std::ifstream s("session/alerts.json");
@@ -1050,6 +1075,21 @@ public:
 	{
 		return v_alerts;
 	}
+	size_t f_alerts_duration() const
+	{
+		return v_alerts_duration;
+	}
+	void f_alerts_stop(const std::string& a_token)
+	{
+		auto i = v_alerts.find(a_token);
+		if (i != v_alerts.end() && i->second.v_source) i->second.v_timer->cancel();
+	}
+	void f_alerts_duration(size_t a_value)
+	{
+		if (a_value == v_alerts_duration) return;
+		v_alerts_duration = a_value;
+		f_options_save();
+	}
 	bool f_content_can_play_in_background() const
 	{
 		return v_content_can_play_in_background;
@@ -1058,7 +1098,7 @@ public:
 	{
 		if (a_value == v_content_can_play_in_background) return;
 		v_content_can_play_in_background = a_value;
-		if (v_options_changed) v_options_changed();
+		f_options_save();
 	}
 	bool f_content_playing() const
 	{
@@ -1097,7 +1137,7 @@ public:
 		if (a_value == v_capture_threshold) return;
 		v_capture_threshold = a_value;
 		v_recognizer->f_notify();
-		if (v_options_changed) v_options_changed();
+		f_options_save();
 	}
 	size_t f_capture_integral() const
 	{
@@ -1116,7 +1156,7 @@ public:
 		if (a_value == v_capture_auto) return;
 		v_capture_auto = a_value;
 		v_recognizer->f_notify();
-		if (v_options_changed) v_options_changed();
+		f_options_save();
 	}
 	bool f_capture_force() const
 	{

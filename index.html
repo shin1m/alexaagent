@@ -60,11 +60,14 @@
 #alerts div.active {
   color: orange;
 }
-#alerts i {
+#alerts div i {
   margin-right: 0.75em;
 }
-#alerts span {
+#alerts div span {
   font-size: 2em;
+}
+#alerts div button {
+  margin-left: 0.75em;
 }
 #recognizer, #playback, #alerts {
   text-align: center;
@@ -88,6 +91,7 @@ document.addEventListener("DOMContentLoaded", function() {
   var next = playback.querySelector(".next");
   var previous = playback.querySelector(".previous");
   var options = document.getElementById("options");
+  var alerts_duration = options.querySelector(".alerts-duration");
   var capture_auto = options.querySelector(".capture-auto input");
   var content_background = options.querySelector(".content-background input");
   var notification = document.querySelector(".mdl-js-snackbar");
@@ -124,27 +128,33 @@ document.addEventListener("DOMContentLoaded", function() {
       capture_threshold.addEventListener("change", function() {
         send({threshold: parseInt(capture_threshold.value)});
       }, false);
-      recognize.addEventListener("mousedown", fixed_sender({force: true}), false);
-      recognize.addEventListener("mouseup", fixed_sender({force: false}), false);
-      recognize.addEventListener("keydown", fixed_sender({force: true}), false);
-      recognize.addEventListener("keyup", fixed_sender({force: false}), false);
-      play.addEventListener("click", empty_sender("play"), false);
-      pause.addEventListener("click", empty_sender("pause"), false);
-      next.addEventListener("click", empty_sender("next"), false);
-      previous.addEventListener("click", empty_sender("previous"), false);
-      capture_auto.addEventListener("change", check_sender("auto", capture_auto), false);
-      content_background.addEventListener("change", check_sender("background", content_background), false);
+      recognize.addEventListener("mousedown", fixed_sender({"capture.force": true}), false);
+      recognize.addEventListener("mouseup", fixed_sender({"capture.force": false}), false);
+      recognize.addEventListener("keydown", function(event) {
+        if (event.key != "Tab") send({"capture.force": true});
+      }, false);
+      recognize.addEventListener("keyup", function(event) {
+        if (event.key != "Tab") send({"capture.force": false});
+      }, false);
+      play.addEventListener("click", empty_sender("playback.play"), false);
+      pause.addEventListener("click", empty_sender("playback.pause"), false);
+      next.addEventListener("click", empty_sender("playback.next"), false);
+      previous.addEventListener("click", empty_sender("playback.previous"), false);
+      alerts_duration.addEventListener("change", function() {
+        send({"alerts.duration": parseInt(alerts_duration.value)});
+      }, false);
+      capture_auto.addEventListener("change", check_sender("capture.auto", capture_auto), false);
+      content_background.addEventListener("change", check_sender("content.background", content_background), false);
       send({hello: null});
     };
     var threshold;
     var updateAlerts = function() {
-      var e = document.getElementById("alerts");
+      var container = document.getElementById("alerts");
       var alerts = [];
       var pad = function(x) {
         return (x < 10 ? "0" : "") + x;
       };
       var refresh = function() {
-        e.innerHTML = "";
         for (var i = 0; i < alerts.length; ++i) {
           var a = alerts[i];
           var t;
@@ -159,27 +169,42 @@ document.addEventListener("DOMContentLoaded", function() {
             var tt = pad(parseInt(s / 60) % 60) + ':' + pad(s % 60);
             var h = parseInt(s / 3600);
             if (h > 0) {
-              tt = h + ':' + tt;
+              tt = (h % 24) + ':' + tt;
               var d = parseInt(h / 24);
               if (d > 0) tt = d + '.' + tt;
             }
             t += tt;
           } else {
-            t = pad(a.at.getHours()) + ':' + a.at.getMinutes();
+            t = pad(a.at.getHours()) + ':' + pad(a.at.getMinutes());
             if (a.at.getTime() - Date.now() >= 24 * 60 * 60 * 1000) t = (a.at.getMonth() + 1) + '/' + a.at.getDate() + ' ' + t;
           }
-          e.insertAdjacentHTML("beforeend", a.html + t + '</span></div>');
+          a.label.innerText = t;
         }
       };
       setInterval(refresh, 1000);
       return function(source) {
+        container.innerHTML = "";
         alerts = [];
         for (var i = 0; i < source.length; ++i) {
           var a = source[i];
+          var e = document.createElement("div");
+          e.innerHTML = '<i class="material-icons">' + (a.type == "TIMER" ? "timer" : "alarm") + '</i><span></span>';
+          if (a.active) {
+            e.className = "active";
+            var button = document.createElement("button");
+            button.className = "mdl-button mdl-js-button mdl-button--raised mdl-js-ripple-effect";
+            button.innerText = "Stop";
+            button.addEventListener("click", function() {
+              send({"alerts.stop": a.token});
+            });
+            componentHandler.upgradeElement(button);
+            e.appendChild(button);
+          }
+          container.appendChild(e);
           alerts.push({
             type: a.type,
             at: new Date(a.at),
-            html: '<div class="' + (a.active ? "active" : "") + '"><i class="material-icons">' + (a.type == "TIMER" ? "timer" : "alarm") + '</i><span>'
+            label: e.querySelector("span")
           });
         }
         refresh();
@@ -205,6 +230,7 @@ document.addEventListener("DOMContentLoaded", function() {
       if (options !== undefined) {
         threshold = options.capture.threshold;
         capture_threshold.MaterialSlider.change(threshold);
+        alerts_duration.parentElement.MaterialTextfield.change(options.alerts.duration);
         capture_auto.parentElement.MaterialSwitch[options.capture.auto ? "on" : "off"]();
         content_background.parentElement.MaterialSwitch[options.content.can_play_in_background ? "on" : "off"]();
       }
@@ -249,6 +275,10 @@ document.addEventListener("DOMContentLoaded", function() {
       </div>
       <div id="alerts" class="mdl-cell mdl-cell--12-col"></div>
       <div id="options" class="mdl-cell mdl-cell--4-col mdl-cell--4-offset">
+        <div class="mdl-cell mdl-cell--12-col mdl-textfield mdl-js-textfield mdl-textfield--floating-label">
+          <input type="number" class="mdl-textfield__input alerts-duration">
+          <label class="mdl-textfield__label">Alerts Duration</label>
+        </div>
         <div class="mdl-cell mdl-cell--12-col">
           <label class="mdl-switch mdl-js-switch mdl-js-ripple-effect capture-auto">
             <input type="checkbox" class="mdl-switch__input">
