@@ -331,9 +331,33 @@ private:
 					});
 				};
 			else
-				open = [url]
+				open = [this, url]
 				{
-					return new t_url_audio_source(url.c_str());
+					std::thread([&]
+					{
+						try {
+							v_scheduler.f_strand().dispatch([&, source = new t_url_audio_source(url.c_str())]
+							{
+								v_content->v_task.f_post([source](auto)
+								{
+									throw source;
+								});
+							});
+						} catch (...) {
+							v_scheduler.f_strand().dispatch([&, e = std::current_exception()]
+							{
+								v_content->v_task.f_post([e](auto)
+								{
+									std::rethrow_exception(e);
+								});
+							});
+						}
+					}).detach();
+					try {
+						while (true) v_content->v_task.f_wait();
+					} catch (t_audio_source* source) {
+						return source;
+					}
 				};
 			v_content->f_queue([this, token, open = std::move(open)]
 			{
