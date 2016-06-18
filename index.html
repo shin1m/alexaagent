@@ -126,7 +126,7 @@ document.addEventListener("DOMContentLoaded", function() {
     };
     ws.onopen = function() {
       capture_threshold.addEventListener("change", function() {
-        send({threshold: parseInt(capture_threshold.value)});
+        send({"capture.threshold": parseInt(capture_threshold.value)});
       }, false);
       recognize.addEventListener("mousedown", fixed_sender({"capture.force": true}), false);
       recognize.addEventListener("mouseup", fixed_sender({"capture.force": false}), false);
