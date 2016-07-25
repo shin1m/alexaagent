@@ -1,6 +1,6 @@
-AC_INIT([alexaagent], [201606])
+AC_INIT([alexaagent], [201607])
 AM_INIT_AUTOMAKE([foreign nostdinc dist-bzip2 no-dist-gzip])
-AC_CONFIG_SRCDIR([alexaagent.cc])
+AC_CONFIG_SRCDIR([main.cc])
 
 PKG_CHECK_MODULES([OPENAL], [openal >= 1.1])
 PKG_CHECK_MODULES([LIBAVCODEC], [libavcodec])
