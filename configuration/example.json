@@ -1,0 +1,26 @@
+{
+	"profile": {
+		"client_id": "Your client ID",
+		"client_secret": "Your client secret",
+		"redirect_uri": "A return URI added to your app's security profile",
+		"product_id": "Your product type ID",
+		"device_serial_number": "The unique key of this instance"
+	},
+	"service": {
+		"host": "localhost",
+		"http2": 3000,
+		"websocket": 3002,
+		"key": "configuration/server.key",
+		"certificate": "configuration/server.crt"
+	},
+	"sounds": {
+		"timer": {
+			"foreground": "sounds/timer-foreground.mp3",
+			"background": "sounds/timer-background.mp3"
+		},
+		"alarm": {
+			"foreground": "sounds/alarm-foreground.mp3",
+			"background": "sounds/alarm-background.mp3"
+		}
+	}
+}
