@@ -142,6 +142,7 @@ int main(int argc, char* argv[])
 	auto profile = configuration / "profile";
 	auto service = configuration / "service";
 	auto service_host = service / "host"_jss;
+	auto http2port = std::to_string(static_cast<int>(service / "http2"_jsn));
 	int wsport = service / "websocket"_jsn;
 	auto service_key = service * "key" | std::string();
 	auto sounds = configuration / "sounds";
@@ -259,15 +260,15 @@ int main(int argc, char* argv[])
 		a_response.write_head(200);
 		a_response.end((service_key.empty() ? "ws://" : "wss://") + service_host + ':' + std::to_string(wsport) + "/session");
 	});
+	boost::asio::ssl::context tls(boost::asio::ssl::context::tlsv12);
 	boost::system::error_code ec;
 	if (service_key.empty()) {
-		if (server.listen_and_serve(ec, service_host, std::to_string(static_cast<int>(service / "http2"_jsn)), true)) throw std::runtime_error(ec.message());
+		if (server.listen_and_serve(ec, service_host, http2port, true)) throw std::runtime_error(ec.message());
 	} else {
-		boost::asio::ssl::context tls(boost::asio::ssl::context::tlsv12);
 		tls.use_private_key_file(service_key, boost::asio::ssl::context::pem);
 		tls.use_certificate_chain_file(service / "certificate"_jss);
 		nghttp2::asio_http2::server::configure_tls_context_easy(ec, tls);
-		if (server.listen_and_serve(ec, tls, service_host, std::to_string(static_cast<int>(service / "http2"_jsn)), true)) throw std::runtime_error(ec.message());
+		if (server.listen_and_serve(ec, tls, service_host, http2port, true)) throw std::runtime_error(ec.message());
 	}
 	scheduler.reset(new t_scheduler(*server.io_services().front()));
 	boost::asio::signal_set signals(*server.io_services().front(), SIGINT);
