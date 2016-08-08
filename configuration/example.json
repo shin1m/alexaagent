@@ -2,7 +2,7 @@
 	"profile": {
 		"client_id": "Your client ID",
 		"client_secret": "Your client secret",
-		"redirect_uri": "A return URI added to your app's security profile",
+		"redirect_uri": "http|https://<host>[:<port>]/grant (A return URI added to your app's security profile e.g. https://localhost:3000/grant)",
 		"product_id": "Your product type ID",
 		"device_serial_number": "The unique key of this instance"
 	},
