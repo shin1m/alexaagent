@@ -602,7 +602,7 @@ private:
 		boost::system::error_code ec;
 		auto request = v_session->submit(ec, "POST", "https://avs-alexa-na.amazon.com/v20160207/events", a_data, v_header);
 		if (!request) {
-			std::fprintf(stderr, "events POST failed: %s\n", ec.message());
+			std::fprintf(stderr, "events POST failed: %s\n", ec.message().c_str());
 			f_reconnect();
 			return nullptr;
 		}
@@ -988,7 +988,7 @@ private:
 			boost::system::error_code ec;
 			auto request = v_session->submit(ec, "GET", "https://avs-alexa-na.amazon.com/v20160207/directives", v_header);
 			if (!request) {
-				std::fprintf(stderr, "directives GET failed: %s\n", ec.message());
+				std::fprintf(stderr, "directives GET failed: %s\n", ec.message().c_str());
 				this->f_reconnect();
 				return;
 			}

@@ -92,7 +92,7 @@ inline t_set operator<<(picojson::value& a_value, const std::string& a_name)
 template<typename T>
 inline picojson::value& operator&(t_set a_set, T&& a_x)
 {
-	a_set.v_value.get<picojson::value::object>().emplace(a_set.v_name, std::forward<T>(a_x));
+	a_set.v_value.get<picojson::value::object>().emplace(a_set.v_name, picojson::value(std::forward<T>(a_x)));
 	return a_set.v_value;
 }
 

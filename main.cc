@@ -284,7 +284,7 @@ int main(int argc, char* argv[])
 		if (!token.empty()) refresh(token);
 	}
 	server.join();
-	wsthread.join();
+	if (wsthread.joinable()) wsthread.join();
 	std::fprintf(stderr, "server stopped.\n");
 	return 0;
 }
