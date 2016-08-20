@@ -3,8 +3,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Alexa Voice Service Agent</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
-<link rel="stylesheet" href="https://code.getmdl.io/1.1.3/material.light_blue-blue.min.css">
-<script defer src="https://code.getmdl.io/1.1.3/material.min.js"></script>
+<link rel="stylesheet" href="https://code.getmdl.io/1.2.0/material.light_blue-blue.min.css">
+<script defer src="https://code.getmdl.io/1.2.0/material.min.js"></script>
 <style>
 .flex-container {
   display: flex;
@@ -19,7 +19,7 @@
 #capture.busy i {
   color: orange;
 }
-#capture .indicator, #speaker .indicator {
+#capture .indicator {
   font-size: 1vh;
   margin: 0 26 0 26;
   position: relative;
@@ -38,19 +38,8 @@
 #recognizer.active i {
   color: orange;
 }
-#speaker i {
-  color: dodgerblue;
-}
 #speaker.playing i {
   color: orange;
-}
-#speaker.muted {
-  background-color: lightgray;
-}
-#speaker-volume {
-  position: absolute;
-  height: 1em;
-  background-color: dodgerblue;
 }
 #alerts div {
   display: inline-flex;
@@ -81,10 +70,11 @@ document.addEventListener("DOMContentLoaded", function() {
   var capture_integral1 = capture.querySelector(".integral1");
   var recognizer = document.getElementById("recognizer");
   var recognize = recognizer.querySelector("button");
-  var recognize_status = recognizer.querySelector(".status");
+  var recognize_icon = recognizer.querySelector("i");
   var speaker = document.getElementById("speaker");
-  var speaker_icon = document.getElementById("speaker-icon");
-  var speaker_volume = document.getElementById("speaker-volume");
+  var speaker_mute = speaker.querySelector(".mute");
+  var speaker_icon = speaker_mute.querySelector("i");
+  var speaker_volume = speaker.querySelector(".volume");
   var playback = document.getElementById("playback");
   var play = playback.querySelector(".play");
   var pause = playback.querySelector(".pause");
@@ -124,6 +114,7 @@ document.addEventListener("DOMContentLoaded", function() {
         send(put({}, name, null));
       };
     };
+    var muted;
     ws.onopen = function() {
       capture_threshold.addEventListener("change", function() {
         send({"capture.threshold": parseInt(capture_threshold.value)});
@@ -135,6 +126,12 @@ document.addEventListener("DOMContentLoaded", function() {
       }, false);
       recognize.addEventListener("keyup", function(event) {
         if (event.key != "Tab") send({"capture.force": false});
+      }, false);
+      speaker_mute.addEventListener("click", function() {
+        send({"speaker.muted": !muted});
+      }, false);
+      speaker_volume.addEventListener("change", function() {
+        send({"speaker.volume": parseInt(speaker_volume.value)});
       }, false);
       play.addEventListener("click", empty_sender("playback.play"), false);
       pause.addEventListener("click", empty_sender("playback.pause"), false);
@@ -220,16 +217,17 @@ document.addEventListener("DOMContentLoaded", function() {
       var state = data.state_changed;
       if (state !== undefined) {
         recognizer.classList[state.dialog.active ? "add" : "remove"]("active");
-        recognize_status.innerText = state.dialog.expecting_speech ? "help" : state.dialog.playing ? "record_voice_over" : "mic";
+        recognize_icon.innerText = state.dialog.expecting_speech ? "help" : state.dialog.playing ? "record_voice_over" : "mic";
         speaker.classList[state.content.playing ? "add" : "remove"]("playing");
-        speaker_icon.innerText = state.speaker.muted ? "volume_off" : "volume_up";
-        speaker_volume.style.width = state.speaker.volume + '%';
         updateAlerts(state.alerts);
       }
       var options = data.options_changed;
       if (options !== undefined) {
         threshold = options.capture.threshold;
         capture_threshold.MaterialSlider.change(threshold);
+        muted = options.speaker.muted;
+        speaker_icon.innerText = muted ? "volume_off" : "volume_up";
+        speaker_volume.MaterialSlider.change(options.speaker.volume);
         alerts_duration.parentElement.MaterialTextfield.change(options.alerts.duration);
         capture_auto.parentElement.MaterialSwitch[options.capture.auto ? "on" : "off"]();
         content_background.parentElement.MaterialSwitch[options.content.can_play_in_background ? "on" : "off"]();
@@ -245,7 +243,7 @@ document.addEventListener("DOMContentLoaded", function() {
   <main class="mdl-layout__content">
     <div class="mdl-grid">
       <div id="capture" class="mdl-cell mdl-cell--12-col flex-container">
-        <i class="material-icons">mic</i>
+        <button class="mdl-button mdl-js-button" disabled><i class="material-icons">mic</i></button>
         <div class="flex-cell">
           <div class="indicator">
             <div class="integral0"></div>
@@ -255,16 +253,12 @@ document.addEventListener("DOMContentLoaded", function() {
         </div>
       </div>
       <div id="recognizer" class="mdl-cell mdl-cell--12-col">
-        <button class="mdl-button mdl-js-button mdl-button--raised mdl-js-ripple-effect" autofocus>
-          <i class="material-icons status">mic</i>
-        </button>
+        <button class="mdl-button mdl-js-button mdl-button--raised mdl-js-ripple-effect" autofocus><i class="material-icons">mic</i></button>
       </div>
       <div id="speaker" class="mdl-cell mdl-cell--12-col flex-container">
-        <i id="speaker-icon" class="material-icons">volume_up</i>
+        <button class="mdl-button mdl-js-button mdl-js-ripple-effect mute"><i class="material-icons">volume_up</i></button>
         <div class="flex-cell">
-          <div class="indicator">
-            <div id="speaker-volume"></div>
-          </div>
+          <input class="mdl-slider mdl-js-slider volume" type="range" max="100">
         </div>
       </div>
       <div id="playback" class="mdl-cell mdl-cell--12-col">

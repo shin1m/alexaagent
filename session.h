@@ -33,6 +33,10 @@ class t_session
 			v_directives.push_back(std::move(a_directive));
 			v_task.f_notify();
 		}
+		void f_clear()
+		{
+			v_directives.clear();
+		}
 		void f_run()
 		{
 			while (true) {
@@ -53,6 +57,15 @@ class t_session
 		void f_flush()
 		{
 			while (v_target.f_flush() > 0) v_task.f_wait(std::chrono::milliseconds(static_cast<int>(v_target.f_remain() * 250.0)));
+		}
+		void f_stop()
+		{
+			if (v_playing.empty()) return;
+			v_target.f_stop();
+			v_task.f_post([](auto)
+			{
+				throw nullptr;
+			});
 		}
 	};
 public:
@@ -172,7 +185,7 @@ private:
 			try {
 				v_session.v_handlers.at(std::make_pair(ns, name))(directive);
 			} catch (std::exception& e) {
-				v_session.f_exception_encountered(ns + '.' + name, "UNSUPPORTED_OPERATION", e);
+				v_session.f_exception_encountered(ns + '.' + name, "UNSUPPORTED_OPERATION", e.what());
 			}
 		}
 		void f_audio_content(const char* a_p, size_t a_n)
@@ -281,7 +294,7 @@ private:
 				this->f_alerts_save();
 				this->f_alerts_event("SetAlertSucceeded", token);
 			} catch (std::exception& e) {
-				this->f_exception_encountered("Alerts.SetAlert", "INTERNAL_ERROR", e);
+				this->f_exception_encountered("Alerts.SetAlert", "INTERNAL_ERROR", e.what());
 				this->f_alerts_event("SetAlertFailed", token);
 			}
 		}},
@@ -294,7 +307,7 @@ private:
 				this->f_alerts_save();
 				this->f_alerts_event("DeleteAlertSucceeded", token);
 			} catch (std::exception& e) {
-				this->f_exception_encountered("Alerts.DeleteAlert", "INTERNAL_ERROR", e);
+				this->f_exception_encountered("Alerts.DeleteAlert", "INTERNAL_ERROR", e.what());
 				this->f_alerts_event("DeleteAlertFailed", token);
 			}
 		}},
@@ -303,10 +316,10 @@ private:
 			auto& payload = a_directive / "directive" / "payload";
 			auto behavior = payload / "playBehavior"_jss;
 			if (behavior == "REPLACE_ALL") {
-				v_content->v_directives.clear();
-				this->f_player_stop();
+				v_content->f_clear();
+				v_content->f_stop();
 			} else if (behavior == "REPLACE_ENQUEUED") {
-				v_content->v_directives.clear();
+				v_content->f_clear();
 			}
 			auto& stream = payload / "audioItem" / "stream";
 			auto url = stream / "url"_jss;
@@ -408,31 +421,31 @@ private:
 		}},
 		{std::make_pair("AudioPlayer", "Stop"), [this](const picojson::value&)
 		{
-			this->f_player_stop();
+			v_content->f_stop();
 		}},
 		{std::make_pair("AudioPlayer", "ClearQueue"), [this](const picojson::value& a_directive)
 		{
 			auto& payload = a_directive / "directive" / "payload";
 			auto behavior = payload / "clearBehavior"_jss;
 			if (behavior == "CLEAR_ENQUEUED") {
-				v_content->v_directives.clear();
+				v_content->f_clear();
 			} else if (behavior == "CLEAR_ALL") {
-				v_content->v_directives.clear();
-				this->f_player_stop();
+				v_content->f_clear();
+				v_content->f_stop();
 			}
 			this->f_empty_event("AudioPlayer", "PlaybackQueueCleared");
 		}},
 		{std::make_pair("Speaker", "SetVolume"), [this](const picojson::value& a_directive)
 		{
-			f_speaker_set_volume(a_directive / "directive" / "payload" / "volume"_jsn);
+			f_speaker_volume(a_directive / "directive" / "payload" / "volume"_jsn);
 		}},
 		{std::make_pair("Speaker", "AdjustVolume"), [this](const picojson::value& a_directive)
 		{
-			f_speaker_set_volume(v_speaker_volume + a_directive / "directive" / "payload" / "volume"_jsn);
+			f_speaker_volume(v_speaker_volume + a_directive / "directive" / "payload" / "volume"_jsn);
 		}},
 		{std::make_pair("Speaker", "SetMute"), [this](const picojson::value& a_directive)
 		{
-			f_speaker_set_muted(a_directive / "directive" / "payload" / "mute"_jsb);
+			f_speaker_muted(a_directive / "directive" / "payload" / "mute"_jsb);
 		}},
 		{std::make_pair("SpeechSynthesizer", "Speak"), [this](const picojson::value& a_directive)
 		{
@@ -451,12 +464,14 @@ private:
 				f("SpeechStarted");
 				if (v_state_changed) v_state_changed();
 				try {
-					std::unique_ptr<t_audio_source> source( audio->f_open([] {}, [] {}));
+					std::unique_ptr<t_audio_source> source(audio->f_open([] {}, [] {}));
 					t_audio_decoder decoder(*source);
 					v_dialog->f_loop(decoder);
 					v_dialog->f_flush();
+				} catch (nullptr_t) {
+					this->f_exception_encountered("SpeechSynthesizer.Speak", "INTERNAL_ERROR", "Stopped");
 				} catch (std::exception& e) {
-					this->f_exception_encountered("SpeechSynthesizer.Speak", "INTERNAL_ERROR", e);
+					this->f_exception_encountered("SpeechSynthesizer.Speak", "INTERNAL_ERROR", e.what());
 				}
 				f("SpeechFinished");
 				v_dialog->v_playing.clear();
@@ -626,13 +641,13 @@ private:
 	{
 		f_event(f_metadata(a_namespace, a_name, {}));
 	}
-	void f_exception_encountered(const std::string& a_directive, const std::string& a_type, const std::exception& a_e)
+	void f_exception_encountered(const std::string& a_directive, const std::string& a_type, const char* a_message)
 	{
 		auto metadata = f_metadata("System", "ExceptionEncountered", {
 			{"unparsedDirective", picojson::value(a_directive)},
 			{"error", picojson::value(picojson::value::object{
 				{"type", picojson::value(a_type)},
-				{"message", picojson::value(a_e.what())}
+				{"message", picojson::value(a_message)}
 			})}
 		});
 		metadata << "context" & f_context();
@@ -675,7 +690,6 @@ private:
 				this->f_alerts_event("AlertStarted", i->first);
 				i->second.v_timer->expires_from_now(std::chrono::seconds(v_alerts_duration));
 				i->second.v_timer->async_wait([this, i](auto)
-				//v_scheduler.f_run_in(std::chrono::seconds(v_alerts_duration), [this, i](auto)
 				{
 					this->f_alerts_event("AlertStopped", i->first);
 					v_alerts.erase(i);
@@ -715,13 +729,6 @@ private:
 			{"token", picojson::value(v_content->v_playing)},
 			{"offsetInMilliseconds", picojson::value(static_cast<double>(v_content->f_offset()))}
 		}));
-	}
-	void f_player_stop()
-	{
-		if (!v_content->v_playing.empty()) v_content->v_task.f_post([](auto)
-		{
-			throw nullptr;
-		});
 	}
 	template<typename T_done>
 	void f_player_background(T_done a_done)
@@ -768,7 +775,6 @@ private:
 			{"volume", picojson::value(static_cast<double>(v_speaker_volume))},
 			{"muted", picojson::value(v_speaker_muted)}
 		}));
-		if (v_state_changed) v_state_changed();
 	}
 	void f_speaker_apply()
 	{
@@ -778,20 +784,7 @@ private:
 			{"volume", picojson::value(static_cast<double>(v_speaker_volume))},
 			{"muted", picojson::value(v_speaker_muted)}
 		}).serialize(std::ostreambuf_iterator<char>(s), true);
-	}
-	void f_speaker_set_volume(long a_volume)
-	{
-		if (a_volume < 0) a_volume = 0;
-		if (a_volume > 100) a_volume = 100;
-		v_speaker_volume = a_volume;
-		f_speaker_apply();
-		f_speaker_event("VolumeChanged");
-	}
-	void f_speaker_set_muted(bool a_muted)
-	{
-		v_speaker_muted = a_muted;
-		f_speaker_apply();
-		f_speaker_event("MuteChanged");
+		if (v_options_changed) v_options_changed();
 	}
 	void f_dialog_acquire(t_task& a_task)
 	{
@@ -828,7 +821,7 @@ private:
 	{
 		while (true) {
 			if (!a_busy && !v_expecting_timeout && v_expecting_speech) v_expecting_speech();
-			if ((v_capture_busy && v_capture_auto && v_dialog->v_playing.empty() && (v_content->v_playing.empty()) || v_capture_force) != a_busy) return false;
+			if ((v_capture_busy && v_capture_auto && v_dialog->v_playing.empty() && v_content->v_playing.empty() || v_capture_force) != a_busy) return false;
 			ALCint n;
 			alcGetIntegerv(a_device, ALC_CAPTURE_SAMPLES, 1, &n);
 			if (n >= 160) break;
@@ -870,6 +863,10 @@ private:
 				v_expecting_speech = nullptr;
 				v_expecting_timeout = nullptr;
 			} else {
+				if (v_capture_force) {
+					v_dialog->f_clear();
+					v_dialog->f_stop();
+				}
 				f_dialog_acquire(*v_recognizer);
 			}
 			if (v_state_changed) v_state_changed();
@@ -957,7 +954,7 @@ private:
 			v_capture_threshold = options / "capture_threshold"_jsn;
 			v_capture_auto = options / "capture_auto"_jsb;
 		} catch (std::exception& e) {
-			f_exception_encountered(std::string(), "INTERNAL_ERROR", e);
+			f_exception_encountered(std::string(), "INTERNAL_ERROR", e.what());
 		}
 		try {
 			picojson::value alerts;
@@ -965,7 +962,7 @@ private:
 			s >> alerts;
 			for (auto& x : alerts.get<picojson::value::object>()) f_alerts_set(x.first, x.second / "type"_jss, x.second / "scheduledTime"_jss);
 		} catch (std::exception& e) {
-			f_exception_encountered(std::string(), "INTERNAL_ERROR", e);
+			f_exception_encountered(std::string(), "INTERNAL_ERROR", e.what());
 		}
 		try {
 			picojson::value speaker;
@@ -974,7 +971,7 @@ private:
 			v_speaker_volume = speaker / "volume"_jsn;
 			v_speaker_muted = speaker / "muted"_jsb;
 		} catch (std::exception& e) {
-			f_exception_encountered(std::string(), "INTERNAL_ERROR", e);
+			f_exception_encountered(std::string(), "INTERNAL_ERROR", e.what());
 		}
 		f_speaker_apply();
 	}
@@ -1132,9 +1129,23 @@ public:
 	{
 		return v_speaker_volume;
 	}
+	void f_speaker_volume(long a_volume)
+	{
+		if (a_volume < 0) a_volume = 0;
+		if (a_volume > 100) a_volume = 100;
+		v_speaker_volume = a_volume;
+		f_speaker_apply();
+		f_speaker_event("VolumeChanged");
+	}
 	bool f_speaker_muted() const
 	{
 		return v_speaker_muted;
+	}
+	void f_speaker_muted(bool a_muted)
+	{
+		v_speaker_muted = a_muted;
+		f_speaker_apply();
+		f_speaker_event("MuteChanged");
 	}
 	void f_playback_play()
 	{

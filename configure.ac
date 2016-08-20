@@ -1,4 +1,4 @@
-AC_INIT([alexaagent], [201607])
+AC_INIT([alexaagent], [201608])
 AM_INIT_AUTOMAKE([foreign nostdinc dist-bzip2 no-dist-gzip])
 AC_CONFIG_SRCDIR([main.cc])
 

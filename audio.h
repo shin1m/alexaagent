@@ -254,11 +254,7 @@ public:
 	}
 	~t_audio_target()
 	{
-		alSourceStop(v_source);
-		ALint n = f_get(AL_BUFFERS_QUEUED);
-		std::vector<ALuint> buffers(n);
-		alSourceUnqueueBuffers(v_source, n, buffers.data());
-		alDeleteBuffers(buffers.size(), buffers.data());
+		f_stop();
 		alDeleteSources(1, &v_source);
 	}
 	operator ALuint() const
@@ -307,6 +303,15 @@ public:
 		alDeleteBuffers(n, buffers.data());
 		alGetSourcef(v_source, AL_SEC_OFFSET, &v_offset);
 		return queued - n;
+	}
+	void f_stop()
+	{
+		alSourceStop(v_source);
+		ALint n = f_get(AL_BUFFERS_QUEUED);
+		std::vector<ALuint> buffers(n);
+		alSourceUnqueueBuffers(v_source, n, buffers.data());
+		alDeleteBuffers(buffers.size(), buffers.data());
+		f_reset();
 	}
 };
 

@@ -37,6 +37,14 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 		{
 			a_session->f_content_can_play_in_background(a_x.template get<bool>());
 		}},
+		{"speaker.volume", [&](auto a_x)
+		{
+			a_session->f_speaker_volume(a_x.template get<double>());
+		}},
+		{"speaker.muted", [&](auto a_x)
+		{
+			a_session->f_speaker_muted(a_x.template get<bool>());
+		}},
 		{"playback.play", [&](auto)
 		{
 			a_session->f_playback_play();
@@ -106,10 +114,6 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 			{"alerts", picojson::value(std::move(alerts))},
 			{"content", picojson::value(picojson::value::object{
 				{"playing", picojson::value(a_session->f_content_playing())}
-			})},
-			{"speaker", picojson::value(picojson::value::object{
-				{"volume", picojson::value(static_cast<double>(a_session->f_speaker_volume()))},
-				{"muted", picojson::value(a_session->f_speaker_muted())}
 			})}
 		});
 	};
@@ -121,6 +125,10 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 			})},
 			{"content", picojson::value(picojson::value::object{
 				{"can_play_in_background", picojson::value(a_session->f_content_can_play_in_background())}
+			})},
+			{"speaker", picojson::value(picojson::value::object{
+				{"volume", picojson::value(static_cast<double>(a_session->f_speaker_volume()))},
+				{"muted", picojson::value(a_session->f_speaker_muted())}
 			})},
 			{"capture", picojson::value(picojson::value::object{
 				{"threshold", picojson::value(static_cast<double>(a_session->f_capture_threshold()))},
