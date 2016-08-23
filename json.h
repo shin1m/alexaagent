@@ -70,7 +70,7 @@ inline const T& operator|(const std::pair<picojson::value::object::const_iterato
 
 inline bool operator!(const std::pair<picojson::value::object::const_iterator, picojson::value::object::const_iterator>& a_pair)
 {
-	a_pair.first == a_pair.second;
+	return a_pair.first == a_pair.second;
 }
 
 inline const picojson::value& operator*(const std::pair<picojson::value::object::const_iterator, picojson::value::object::const_iterator>& a_pair)
