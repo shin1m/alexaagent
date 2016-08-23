@@ -742,11 +742,17 @@ private:
 			auto timer = std::make_shared<boost::asio::steady_timer>(v_scheduler.f_io(), std::chrono::duration<int>::max());
 			v_content->v_task.f_post([this, timer](auto)
 			{
-				if (!v_content->v_playing.empty()) this->f_player_event("PlaybackPaused");
+				if (!v_content->v_playing.empty()) {
+					alSourcePause(v_content->v_target);
+					this->f_player_event("PlaybackPaused");
+				}
 				v_content_pausing = true;
 				timer->cancel();
 				do v_content->v_task.f_wait(); while (v_content_pausing);
-				if (!v_content->v_playing.empty()) this->f_player_event("PlaybackResumed");
+				if (!v_content->v_playing.empty()) {
+					alSourcePlay(v_content->v_target);
+					this->f_player_event("PlaybackResumed");
+				}
 			});
 			timer->async_wait([a_done](auto)
 			{
@@ -765,6 +771,7 @@ private:
 	}
 	void f_playback_event(const std::string& a_name)
 	{
+		alSourcePause(v_content->v_target);
 		auto metadata = f_metadata("PlaybackController", a_name, {});
 		metadata << "context" & f_context();
 		f_event(metadata);
