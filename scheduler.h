@@ -40,10 +40,6 @@ public:
 
 class t_scheduler
 {
-	class t_stop
-	{
-	};
-
 	boost::asio::io_service::strand v_strand;
 	std::set<std::unique_ptr<boost::asio::steady_timer>> v_timers;
 	std::set<t_task*> v_tasks;
@@ -62,6 +58,10 @@ class t_scheduler
 	}
 
 public:
+	class t_stop
+	{
+	};
+
 	t_scheduler(boost::asio::io_service& a_io) : v_strand(a_io)
 	{
 	}

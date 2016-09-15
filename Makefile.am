@@ -11,7 +11,7 @@ if PROFILE
 AM_CXXFLAGS += -pg
 AM_LDFLAGS += -pg
 endif
-bin_PROGRAMS = alexaagent play_file play_url
+bin_PROGRAMS = alexaagent play_file play_url tiny_http
 alexaagent_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAVUTIL_LIBS) $(OPENSSL_LIBS) $(LIBNGHTTP2_ASIO_LIBS) -lboost_system -lboost_coroutine -lboost_regex -lpthread
 alexaagent_SOURCES = \
 	json.h \
@@ -29,6 +29,10 @@ play_url_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAVUT
 play_url_SOURCES = \
 	audio.h \
 	play_url.cc
+tiny_http_LDADD = $(OPENSSL_LIBS) -lboost_system -lpthread
+tiny_http_SOURCES = \
+	tiny_http.h \
+	tiny_http.cc
 check_PROGRAMS = test_multipart test_tiny_http
 TESTS = test_multipart test_tiny_http
 test_multipart_SOURCES = \

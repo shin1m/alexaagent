@@ -349,7 +349,7 @@ private:
 					std::thread([&]
 					{
 						try {
-							v_scheduler.f_strand().dispatch([&, source = new t_url_audio_source(url.c_str())]
+							v_scheduler.f_strand().dispatch([&, source = v_open_audio_by_url(url)]
 							{
 								v_content->v_task.f_post([source](auto)
 								{
@@ -1038,6 +1038,10 @@ public:
 	std::function<void()> v_capture;
 	std::function<void()> v_state_changed;
 	std::function<void()> v_options_changed;
+	std::function<t_audio_source*(const std::string&)> v_open_audio_by_url = [](auto& a_url)
+	{
+		return new t_url_audio_source(a_url.c_str());
+	};
 
 	t_session(t_scheduler& a_scheduler, const std::string& a_token, const picojson::value& a_sounds) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler)
 	{
@@ -1050,22 +1054,45 @@ public:
 		f_load_sound(v_sounds[1], a_sounds / "timer" / "background"_jss);
 		f_load_sound(v_sounds[2], a_sounds / "alarm" / "foreground"_jss);
 		f_load_sound(v_sounds[3], a_sounds / "alarm" / "background"_jss);
-		v_scheduler.f_spawn([this](auto& a_task)
+		auto run = [](const char* a_name, auto a_run)
+		{
+			while (true) {
+				try {
+					a_run();
+				} catch (t_scheduler::t_stop&) {
+					throw;
+				} catch (std::exception& e) {
+					std::fprintf(stderr, "%s: caught %s\n", a_name, e.what());
+				} catch (...) {
+					std::fprintf(stderr, "%s: caught unknown.\n", a_name);
+				}
+			}
+		};
+		v_scheduler.f_spawn([this, run](auto& a_task)
 		{
 			t_channel dialog(a_task);
 			v_dialog = &dialog;
-			dialog.f_run();
+			run("dialog", [this]
+			{
+				v_dialog->f_run();
+			});
 		});
-		v_scheduler.f_spawn([this](auto& a_task)
+		v_scheduler.f_spawn([this, run](auto& a_task)
 		{
 			t_channel content(a_task);
 			v_content = &content;
-			content.f_run();
+			run("content", [this]
+			{
+				v_content->f_run();
+			});
 		});
-		v_scheduler.f_spawn([this](auto& a_task)
+		v_scheduler.f_spawn([this, run](auto& a_task)
 		{
 			v_recognizer = &a_task;
-			this->f_recognizer();
+			run("recognizer", [this]
+			{
+				this->f_recognizer();
+			});
 		});
 		v_scheduler.f_run_every(std::chrono::hours(1), [this](auto)
 		{

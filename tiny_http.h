@@ -3,6 +3,7 @@
 
 #include <iterator>
 #include <map>
+#include <regex>
 #include <sstream>
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -97,6 +98,62 @@ inline std::map<std::string, std::string> f_parse_query_string(const std::string
 	}
 	return values;
 }
+
+struct t_http
+{
+	boost::asio::streambuf v_buffer;
+	std::string v_http;
+	size_t v_code;
+	std::string v_message;
+	std::vector<std::string> v_headers;
+	std::function<void(const std::string&)> v_read_until;
+
+	template<typename T_socket>
+	void f_send(T_socket& a_socket)
+	{
+		boost::asio::write(a_socket, v_buffer);
+		boost::asio::read_until(a_socket, v_buffer, "\r\n");
+		std::istream stream(&v_buffer);
+		std::getline(stream >> v_http >> v_code, v_message);
+		boost::asio::read_until(a_socket, v_buffer, "\r\n\r\n");
+		std::string header;
+		while (std::getline(stream, header) && header != "\r") v_headers.push_back(header);
+	}
+	void operator()(boost::asio::io_service& a_io, const std::string& a_url)
+	{
+		std::smatch match;
+		if (!std::regex_match(a_url, match, std::regex{"(https?)://([^/]+)(.*)"})) throw std::runtime_error("invalid url");
+		std::string path = match[3];
+		std::ostream stream(&v_buffer);
+		stream <<
+		"GET " << (path.empty() ? "/" : path) << " HTTP/1.0\r\n"
+		"Host: " << match[2] << "\r\n"
+		"Accept: */*\r\n"
+		"Connection: close\r\n\r\n";
+		boost::asio::ip::tcp::resolver resolver(a_io);
+		auto endpoint = resolver.resolve(boost::asio::ip::tcp::resolver::query(match[2], match[1]));
+		if (match[1] == "http") {
+			auto socket = std::make_shared<boost::asio::ip::tcp::socket>(a_io);
+			boost::asio::connect(*socket, endpoint);
+			f_send(*socket);
+			v_read_until = [this, socket](auto& a_delimiter)
+			{
+				boost::asio::read_until(*socket, v_buffer, a_delimiter);
+			};
+		} else {
+			auto tls = std::make_shared<boost::asio::ssl::context>(boost::asio::ssl::context::tlsv12);
+			tls->set_default_verify_paths();
+			auto socket = std::make_shared<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>(a_io, *tls);
+			boost::asio::connect(socket->lowest_layer(), endpoint);
+			socket->handshake(boost::asio::ssl::stream_base::client);
+			f_send(*socket);
+			v_read_until = [this, tls, socket](auto& a_delimiter)
+			{
+				boost::asio::read_until(*socket, v_buffer, a_delimiter);
+			};
+		}
+	}
+};
 
 template<typename T_success, typename T_error>
 void f_https_post(boost::asio::io_service& a_io, const std::string& a_host, const std::string& a_path, const std::map<std::string, std::string>& a_query, T_success a_success, T_error a_error)

@@ -140,6 +140,41 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 	a_server->start();
 }
 
+void f_override_open_audio_by_url(t_session& a_session)
+{
+	a_session.v_open_audio_by_url = [open = a_session.v_open_audio_by_url](auto& a_url)
+	{
+		std::fprintf(stderr, "opening: %s\n", a_url.c_str());
+		try {
+			return open(a_url);
+		} catch (std::exception& e) {
+			std::fprintf(stderr, "caught: %s\n", e.what());
+			std::fprintf(stderr, "trying to resolve x-mpegurl...\n");
+			try {
+				t_http http;
+				boost::asio::io_service io;
+				http(io, a_url);
+				if (http.v_code != 200) throw std::runtime_error(http.v_message);
+				std::regex content_type{"Content-Type:\\s*\\S+/x-mpegurl\\s*;?.*\r"};
+				if (std::none_of(http.v_headers.begin(), http.v_headers.end(), [&](auto a_x)
+				{
+					return std::regex_match(a_x, content_type);
+				})) throw std::runtime_error("did not match x-mpegurl");;
+				try {
+					http.v_read_until("\n");
+				} catch (...) {}
+				std::string retry;
+				std::getline(std::istream(&http.v_buffer), retry);
+				std::fprintf(stderr, "opening: %s\n", retry.c_str());
+				return open(retry);
+			} catch (std::exception& e) {
+				std::fprintf(stderr, "caught: %s\n", e.what());
+				throw;
+			}
+		}
+	};
+}
+
 int main(int argc, char* argv[])
 {
 	picojson::value configuration;
@@ -191,6 +226,7 @@ int main(int argc, char* argv[])
 					session->f_token(access_token);
 				} else {
 					session.reset(new t_session(*scheduler, access_token, sounds));
+					f_override_open_audio_by_url(*session);
 					if (service_key.empty()) {
 						auto server = std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WS>>(wsport);
 						wsthread = std::thread(std::bind(f_web_socket<decltype(server)::element_type>, session.get(), server));
