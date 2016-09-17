@@ -50,13 +50,16 @@ class t_session
 		{
 			a_decoder([this](size_t a_channels, size_t a_bytes, const char* a_p, size_t a_n, size_t a_rate)
 			{
-				v_target(a_channels, a_bytes, a_p, a_n, a_rate);
-				if (v_target.f_remain() > 2.0) v_task.f_wait(std::chrono::seconds(1));
+				auto queued = v_target(a_channels, a_bytes, a_p, a_n, a_rate);
+				while (queued > 32) {
+					v_task.f_wait(std::chrono::milliseconds(static_cast<int>(v_target.f_remain() * 500.0)));
+					queued = v_target.f_flush();
+				}
 			});
 		}
 		void f_flush()
 		{
-			while (v_target.f_flush() > 0) v_task.f_wait(std::chrono::milliseconds(static_cast<int>(v_target.f_remain() * 250.0)));
+			while (v_target.f_flush() > 0) v_task.f_wait(std::chrono::milliseconds(static_cast<int>(v_target.f_remain() * 500.0)));
 		}
 		void f_stop()
 		{

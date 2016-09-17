@@ -102,17 +102,16 @@ public:
 	{
 		while (av_read_frame(v_format, &v_packet) >= 0) {
 			if (v_packet.stream_index != v_index) {
-				v_packet.size = 0;
+				av_packet_unref(&v_packet);
 				continue;
 			}
-			auto data = v_packet.data;
-			while (true) {
+			while (v_packet.size > 0) {
 				int got;
 				int n = avcodec_decode_audio4(v_codec, v_frame, &got, &v_packet);
 				if (n < 0) throw std::runtime_error("avcodec_decode_audio4");
 				v_packet.data += n;
 				v_packet.size -= n;
-				if (got == 0) break;
+				if (got == 0) continue;
 				int channels = v_codec->channels;
 				if (channels < 1) throw std::runtime_error("no channels");
 				if (channels > 2) {
@@ -154,8 +153,7 @@ public:
 					throw std::runtime_error("unknown sample format");
 				}
 			}
-			std::copy(v_packet.data, v_packet.data + v_packet.size, data);
-			v_packet.data = data;
+			av_packet_unref(&v_packet);
 		}
 	}
 };
@@ -273,8 +271,9 @@ public:
 	{
 		v_remain = v_processed = v_offset = 0.0;
 	}
-	void operator()(size_t a_channels, size_t a_bytes, const char* a_p, size_t a_n, size_t a_rate)
+	ALint operator()(size_t a_channels, size_t a_bytes, const char* a_p, size_t a_n, size_t a_rate)
 	{
+		ALint queued = f_get(AL_BUFFERS_QUEUED);
 		ALint n = f_get(AL_BUFFERS_PROCESSED);
 		ALuint buffer;
 		if (n > 1) {
@@ -293,6 +292,7 @@ public:
 		ALint state = f_get(AL_SOURCE_STATE);
 		if (state != AL_PLAYING) alSourcePlay(v_source);
 		alGetSourcef(v_source, AL_SEC_OFFSET, &v_offset);
+		return ++queued - n;
 	}
 	ALint f_flush()
 	{
@@ -310,7 +310,7 @@ public:
 		ALint n = f_get(AL_BUFFERS_QUEUED);
 		std::vector<ALuint> buffers(n);
 		alSourceUnqueueBuffers(v_source, n, buffers.data());
-		alDeleteBuffers(buffers.size(), buffers.data());
+		alDeleteBuffers(n, buffers.data());
 		f_reset();
 	}
 };
