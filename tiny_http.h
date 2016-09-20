@@ -24,7 +24,7 @@ inline bool f_uri_safe(char a_c)
 template<typename T_in, typename T_out>
 T_out f_uri_encode(T_in a_first, T_in a_last, T_out a_out)
 {
-	auto f_hex = [](int a_x)
+	auto hex = [](int a_x)
 	{
 		return a_x + (a_x < 10 ? '0' : 'A' - 10);
 	};
@@ -34,8 +34,8 @@ T_out f_uri_encode(T_in a_first, T_in a_last, T_out a_out)
 			*a_out++ = x;
 		} else {
 			*a_out++ = '%';
-			*a_out++ = f_hex(x >> 4);
-			*a_out++ = f_hex(x & 0xf);
+			*a_out++ = hex(x >> 4);
+			*a_out++ = hex(x & 0xf);
 		}
 	}
 	return a_out;
@@ -44,7 +44,7 @@ T_out f_uri_encode(T_in a_first, T_in a_last, T_out a_out)
 template<typename T_in, typename T_out>
 T_out f_uri_decode(T_in a_first, T_in a_last, T_out a_out)
 {
-	auto f_hex = [](int a_x)
+	auto hex = [](int a_x)
 	{
 		return std::isdigit(a_x) ? a_x - '0' : std::toupper(a_x) - 'A' + 10;
 	};
@@ -52,9 +52,9 @@ T_out f_uri_decode(T_in a_first, T_in a_last, T_out a_out)
 		unsigned char x = *a_first++;
 		if (x == '%') {
 			if (a_first == a_last) break;
-			x = f_hex(*a_first++) << 4;
+			x = hex(*a_first++) << 4;
 			if (a_first == a_last) break;
-			x |= f_hex(*a_first++);
+			x |= hex(*a_first++);
 		}
 		*a_out++ = x;
 	}
@@ -99,121 +99,124 @@ inline std::map<std::string, std::string> f_parse_query_string(const std::string
 	return values;
 }
 
-struct t_http
+struct t_http10
 {
+	std::string v_service;
+	std::string v_host;
+	std::string v_path;
 	boost::asio::streambuf v_buffer;
 	std::string v_http;
 	size_t v_code;
 	std::string v_message;
 	std::vector<std::string> v_headers;
-	std::function<void(const std::string&)> v_read_until;
 
-	template<typename T_socket>
-	void f_send(T_socket& a_socket)
-	{
-		boost::asio::write(a_socket, v_buffer);
-		boost::asio::read_until(a_socket, v_buffer, "\r\n");
-		std::istream stream(&v_buffer);
-		std::getline(stream >> v_http >> v_code, v_message);
-		boost::asio::read_until(a_socket, v_buffer, "\r\n\r\n");
-		std::string header;
-		while (std::getline(stream, header) && header != "\r") v_headers.push_back(header);
-	}
-	void operator()(boost::asio::io_service& a_io, const std::string& a_url)
+	t_http10(const std::string& a_url)
 	{
 		std::smatch match;
 		if (!std::regex_match(a_url, match, std::regex{"(https?)://([^/]+)(.*)"})) throw std::runtime_error("invalid url");
-		std::string path = match[3];
-		std::ostream stream(&v_buffer);
-		stream <<
-		"GET " << (path.empty() ? "/" : path) << " HTTP/1.0\r\n"
-		"Host: " << match[2] << "\r\n"
-		"Accept: */*\r\n"
-		"Connection: close\r\n\r\n";
+		v_service = match[1];
+		v_host = match[2];
+		v_path = match[3];
+	}
+	t_http10& operator()(const char* a_method)
+	{
+		std::ostream(&v_buffer) << a_method << ' ' << (v_path.empty() ? "/" : v_path) << " HTTP/1.0\r\n"
+		"Host: " << v_host << "\r\n\r\n";
+		return *this;
+	}
+	t_http10& operator()(const char* a_method, const std::string& a_data, const char* a_content_type = "application/octet-stream")
+	{
+		std::ostream(&v_buffer) << a_method << ' ' << (v_path.empty() ? "/" : v_path) << " HTTP/1.0\r\n"
+		"Host: " << v_host << "\r\n"
+		"Content-Length: " << a_data.size() << "\r\n"
+		"Content-Type: " << a_content_type << "\r\n"
+		"Cache-Control: no-cache\r\n\r\n" << a_data;
+		return *this;
+	}
+	t_http10& operator()(const char* a_method, const std::map<std::string, std::string>& a_query)
+	{
+		return (*this)(a_method, f_build_query_string(a_query), "application/x-www-form-urlencoded");
+	}
+	template<typename T_receive>
+	void operator()(boost::asio::io_service& a_io, T_receive a_receive)
+	{
+		auto send = [&](auto& a_socket)
+		{
+			boost::asio::write(a_socket, v_buffer);
+			boost::asio::read_until(a_socket, v_buffer, "\r\n");
+			std::istream stream(&v_buffer);
+			std::getline(stream >> v_http >> v_code, v_message);
+			boost::asio::read_until(a_socket, v_buffer, "\r\n\r\n");
+			std::string header;
+			while (std::getline(stream, header) && header != "\r") v_headers.push_back(header);
+			a_receive(a_socket);
+		};
 		boost::asio::ip::tcp::resolver resolver(a_io);
-		auto endpoint = resolver.resolve(boost::asio::ip::tcp::resolver::query(match[2], match[1]));
-		if (match[1] == "http") {
+		auto endpoint = resolver.resolve(boost::asio::ip::tcp::resolver::query(v_host, v_service));
+		if (v_service == "http") {
 			auto socket = std::make_shared<boost::asio::ip::tcp::socket>(a_io);
 			boost::asio::connect(*socket, endpoint);
-			f_send(*socket);
-			v_read_until = [this, socket](auto& a_delimiter)
-			{
-				boost::asio::read_until(*socket, v_buffer, a_delimiter);
-			};
+			send(*socket);
 		} else {
 			auto tls = std::make_shared<boost::asio::ssl::context>(boost::asio::ssl::context::tlsv12);
 			tls->set_default_verify_paths();
 			auto socket = std::make_shared<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>(a_io, *tls);
 			boost::asio::connect(socket->lowest_layer(), endpoint);
 			socket->handshake(boost::asio::ssl::stream_base::client);
-			f_send(*socket);
-			v_read_until = [this, tls, socket](auto& a_delimiter)
-			{
-				boost::asio::read_until(*socket, v_buffer, a_delimiter);
-			};
+			send(*socket);
 		}
 	}
-};
-
-template<typename T_success, typename T_error>
-void f_https_post(boost::asio::io_service& a_io, const std::string& a_host, const std::string& a_path, const std::map<std::string, std::string>& a_query, T_success a_success, T_error a_error)
-{
-	auto f_check = [a_error](const boost::system::error_code& a_ec)
+	template<typename T_success, typename T_error>
+	void operator()(boost::asio::io_service& a_io, T_success a_success, T_error a_error)
 	{
-		if (a_ec) a_error(a_ec);
-		return a_ec;
-	};
-	auto f_post = [a_host, a_path, a_success, f_check, query = f_build_query_string(a_query)](const std::shared_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>& a_socket)
-	{
-		auto request = std::make_shared<boost::asio::streambuf>();
-		std::ostream(request.get()) <<
-		"POST " << a_path << " HTTP/1.0\r\n"
-		"Host: " << a_host << "\r\n"
-		"Content-Length: " << query.size() << "\r\n"
-		"Content-Type: application/x-www-form-urlencoded\r\n"
-		"Cache-Control: no-cache\r\n\r\n" << query;
-		boost::asio::async_write(*a_socket, *request, [a_success, f_check, a_socket, request](auto a_ec, auto)
+		auto check = [a_error](auto a_ec)
 		{
-			if (f_check(a_ec)) return;
-			auto response = std::make_shared<boost::asio::streambuf>();
-			boost::asio::async_read_until(*a_socket, *response, "\r\n", [a_success, f_check, a_socket, response](auto a_ec, auto)
+			if (a_ec) a_error(a_ec);
+			return a_ec;
+		};
+		auto send = [this, a_success, check](auto& a_socket)
+		{
+			boost::asio::async_write(*a_socket, v_buffer, [this, a_success, check, a_socket](auto a_ec, auto)
 			{
-				if (f_check(a_ec)) return;
-				std::string http;
-				size_t code;
-				std::string message;
-				std::getline(std::istream(response.get()) >> http >> code, message);
-				boost::asio::async_read_until(*a_socket, *response, "\r\n\r\n", [a_success, f_check, a_socket, response, code](auto a_ec, auto)
+				if (!check(a_ec)) boost::asio::async_read_until(*a_socket, v_buffer, "\r\n", [this, a_success, check, a_socket](auto a_ec, auto)
 				{
-					if (f_check(a_ec)) return;
-					std::vector<std::string> headers;
-					std::istream s(response.get());
-					std::string header;
-					while (std::getline(s, header) && header != "\r") headers.push_back(header);
-					boost::asio::async_read(*a_socket, *response, [a_success, a_socket, response, code, headers](auto a_ec, auto)
+					if (check(a_ec)) return;
+					std::getline(std::istream(&v_buffer) >> v_http >> v_code, v_message);
+					boost::asio::async_read_until(*a_socket, v_buffer, "\r\n\r\n", [this, a_success, check, a_socket](auto a_ec, auto)
 					{
-						std::istream content(response.get());
-						a_success(code, headers, content);
+						if (check(a_ec)) return;
+						std::istream stream(&v_buffer);
+						std::string header;
+						while (std::getline(stream, header) && header != "\r") v_headers.push_back(header);
+						a_success(a_socket);
 					});
 				});
 			});
-		});
-	};
-	auto resolver = std::make_shared<boost::asio::ip::tcp::resolver>(a_io);
-	resolver->async_resolve(boost::asio::ip::tcp::resolver::query(a_host, "https"), [&a_io, f_check, f_post, resolver](auto a_ec, auto a_i)
-	{
-		if (f_check(a_ec)) return;
-		auto tls = std::make_shared<boost::asio::ssl::context>(boost::asio::ssl::context::tlsv12);
-		tls->set_default_verify_paths();
-		auto socket = std::make_shared<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>(a_io, *tls);
-		boost::asio::async_connect(socket->lowest_layer(), a_i, [f_check, f_post, tls, socket](auto a_ec, auto)
+		};
+		auto resolver = std::make_shared<boost::asio::ip::tcp::resolver>(a_io);
+		resolver->async_resolve(boost::asio::ip::tcp::resolver::query(v_host, v_service), [this, &a_io, check, send, resolver](auto a_ec, auto a_i)
 		{
-			if (!f_check(a_ec)) socket->async_handshake(boost::asio::ssl::stream_base::client, [f_check, f_post, socket](auto a_ec)
-			{
-				if (!f_check(a_ec)) f_post(socket);
-			});
+			if (check(a_ec)) return;
+			if (v_service == "http") {
+				auto socket = std::make_shared<boost::asio::ip::tcp::socket>(a_io);
+				boost::asio::async_connect(*socket, a_i, [check, send, socket](auto a_ec, auto)
+				{
+					if (!check(a_ec)) send(socket);
+				});
+			} else {
+				auto tls = std::make_shared<boost::asio::ssl::context>(boost::asio::ssl::context::tlsv12);
+				tls->set_default_verify_paths();
+				auto socket = std::make_shared<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>(a_io, *tls);
+				boost::asio::async_connect(socket->lowest_layer(), a_i, [check, send, tls, socket](auto a_ec, auto)
+				{
+					if (!check(a_ec)) socket->async_handshake(boost::asio::ssl::stream_base::client, [check, send, socket](auto a_ec)
+					{
+						if (!check(a_ec)) send(socket);
+					});
+				});
+			}
 		});
-	});
-}
+	}
+};
 
 #endif

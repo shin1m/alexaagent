@@ -151,20 +151,22 @@ void f_override_open_audio_by_url(t_session& a_session)
 			std::fprintf(stderr, "caught: %s\n", e.what());
 			std::fprintf(stderr, "trying to resolve x-mpegurl...\n");
 			try {
-				t_http http;
-				boost::asio::io_service io;
-				http(io, a_url);
-				if (http.v_code != 200) throw std::runtime_error(http.v_message);
-				std::regex content_type{"Content-Type:\\s*\\S+/x-mpegurl\\s*;?.*\r"};
-				if (std::none_of(http.v_headers.begin(), http.v_headers.end(), [&](auto a_x)
-				{
-					return std::regex_match(a_x, content_type);
-				})) throw std::runtime_error("did not match x-mpegurl");;
-				try {
-					http.v_read_until("\n");
-				} catch (...) {}
 				std::string retry;
-				std::getline(std::istream(&http.v_buffer), retry);
+				boost::asio::io_service io;
+				t_http10 http(a_url);
+				http("GET")(io, [&](auto& a_socket)
+				{
+					if (http.v_code != 200) throw std::runtime_error("invalid code");
+					std::regex content_type{"Content-Type:\\s*\\S+/x-mpegurl\\s*;?.*\r"};
+					if (std::none_of(http.v_headers.begin(), http.v_headers.end(), [&](auto a_x)
+					{
+						return std::regex_match(a_x, content_type);
+					})) throw std::runtime_error("did not match x-mpegurl");;
+					try {
+						boost::asio::read_until(a_socket, http.v_buffer, "\n");
+					} catch (...) {}
+					std::getline(std::istream(&http.v_buffer), retry);
+				});
 				std::fprintf(stderr, "opening: %s\n", retry.c_str());
 				return open(retry);
 			} catch (std::exception& e) {
@@ -205,50 +207,52 @@ int main(int argc, char* argv[])
 	std::unique_ptr<t_session> session;
 	std::thread wsthread;
 	std::function<void()> wsstop;
+	auto start = [&](auto a_server)
+	{
+		f_override_open_audio_by_url(*session);
+		wsthread = std::thread(std::bind(f_web_socket<typename decltype(a_server)::element_type>, session.get(), a_server));
+		wsstop = [a_server]
+		{
+			a_server->stop();
+		};
+	};
 	std::function<void(const std::string&)> refresh;
 	auto grant = [&](std::map<std::string, std::string>&& a_query, std::function<void()> a_done)
 	{
 		a_query.emplace("client_id", profile / "client_id"_jss);
 		a_query.emplace("client_secret", profile / "client_secret"_jss);
-		f_https_post(*server.io_services().front(), "api.amazon.com", "/auth/o2/token", a_query, [&, a_done](auto a_code, auto&, auto& a_content)
+		auto http = std::make_shared<t_http10>("https://api.amazon.com/auth/o2/token");
+		(*http)("POST", a_query)(*server.io_services().front(), [&, a_done, http](auto a_socket)
 		{
-			picojson::value result;
-			a_content >> result;
+			boost::asio::async_read(*a_socket, http->v_buffer, [&, a_done, http, a_socket](auto a_ec, auto)
+			{
+				std::istream stream(&http->v_buffer);
+				picojson::value result;
+				stream >> result;
 #ifdef ALEXAAGENT_LOG
-			std::fprintf(stderr, "grant: %d, %s\n", a_code, result.serialize(true).c_str());
+				std::fprintf(stderr, "grant: %s %d%s\n%s\n", http->v_http.c_str(), http->v_code, http->v_message.c_str(), result.serialize(true).c_str());
 #endif
-			if (a_code == 200) {
-				auto access_token = result / "access_token"_jss;
-				size_t expires_in = result / "expires_in"_jsn;
-				auto refresh_token = result / "refresh_token"_jss;
-				std::ofstream("session/token") << refresh_token;
-				if (session) {
-					session->f_token(access_token);
-				} else {
-					session.reset(new t_session(*scheduler, access_token, sounds));
-					f_override_open_audio_by_url(*session);
-					if (service_key.empty()) {
-						auto server = std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WS>>(wsport);
-						wsthread = std::thread(std::bind(f_web_socket<decltype(server)::element_type>, session.get(), server));
-						wsstop = [server]
-						{
-							server->stop();
-						};
+				if (http->v_code == 200) {
+					auto access_token = result / "access_token"_jss;
+					size_t expires_in = result / "expires_in"_jsn;
+					auto refresh_token = result / "refresh_token"_jss;
+					std::ofstream("session/token") << refresh_token;
+					if (session) {
+						session->f_token(access_token);
 					} else {
-						auto server = std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WSS>>(wsport, 1, service / "certificate"_jss, service_key);
-						wsthread = std::thread(std::bind(f_web_socket<decltype(server)::element_type>, session.get(), server));
-						wsstop = [server]
-						{
-							server->stop();
-						};
+						session.reset(new t_session(*scheduler, access_token, sounds));
+						if (service_key.empty())
+							start(std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WS>>(wsport));
+						else
+							start(std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WSS>>(wsport, 1, service / "certificate"_jss, service_key));
 					}
+					scheduler->f_run_in(std::chrono::seconds(expires_in), [&, refresh_token](auto)
+					{
+						refresh(refresh_token);
+					});
 				}
-				scheduler->f_run_in(std::chrono::seconds(expires_in), [&, refresh_token](auto)
-				{
-					refresh(refresh_token);
-				});
-			}
-			a_done();
+				a_done();
+			});
 		}, [a_done](auto a_ec)
 		{
 			std::fprintf(stderr, "grant: %s\n", a_ec.message().c_str());
