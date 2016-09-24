@@ -25,7 +25,7 @@ play_file_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAVU
 play_file_SOURCES = \
 	audio.h \
 	play_file.cc
-play_url_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAVUTIL_LIBS)
+play_url_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAVUTIL_LIBS) $(OPENSSL_LIBS) -lboost_system -lpthread
 play_url_SOURCES = \
 	audio.h \
 	play_url.cc

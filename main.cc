@@ -144,35 +144,61 @@ void f_override_open_audio_by_url(t_session& a_session)
 {
 	a_session.v_open_audio_by_url = [open = a_session.v_open_audio_by_url](auto& a_url)
 	{
-		std::fprintf(stderr, "opening: %s\n", a_url.c_str());
 		try {
-			return open(a_url);
+			auto url = a_url;
+			while (true) {
+				std::fprintf(stderr, "opening: %s\n", url.c_str());
+				try {
+					return open(url);
+				} catch (std::exception& e) {
+					std::fprintf(stderr, "caught: %s\ntrying to resolve...\n", e.what());
+					boost::asio::io_service io;
+					t_http10 http(url);
+					t_audio_source* source = nullptr;
+					http("GET")(io, [&](auto& a_socket)
+					{
+						if (http.v_code != 200) throw std::runtime_error("invalid code");
+						std::smatch match;
+						std::regex content_type{"Content-Type:\\s*\\S+/([^\\s;]+)\\s*;?.*\r"};
+						for (auto& x : http.v_headers) if (std::regex_match(x, match, content_type)) break;
+						if (match.empty()) throw std::runtime_error("no Content-Type found");
+						boost::system::error_code ec;
+						if (match[1] == "x-mpegurl") {
+							std::fprintf(stderr, "found x-mpegurl.\n");
+							boost::asio::read_until(a_socket, http.v_buffer, '\n', ec);
+							if (ec && ec != boost::asio::error::eof) throw ec;
+							std::string line;
+							std::getline(std::istream(&http.v_buffer), line);
+							if (!std::regex_match(line, match, std::regex{"\\s*(https?://\\S+)\\s*\r?"})) throw std::runtime_error("invalid url");
+							url = match[1];
+						} else if (match[1] == "x-scpls") {
+							std::fprintf(stderr, "found x-scpls.\n");
+							boost::asio::read(a_socket, http.v_buffer, ec);
+							if (ec && ec != boost::asio::error::eof) throw ec;
+							auto buffer = std::make_shared<boost::asio::streambuf>();
+							std::ostream stream(buffer.get());
+							stream <<
+							"#EXTM3U\n"
+							"#EXT-X-TARGETDURATION:0\n";
+							std::regex file{"File\\d+\\s*=\\s*(https?://\\S+)\\s*\r?"};
+							std::string line;
+							while (std::getline(std::istream(&http.v_buffer), line))
+								if (std::regex_match(line, match, file)) stream << "#EXTINF:0\n" << match[1] << '\n';
+							stream << "#EXT-X-ENDLIST\n";
+							source = new t_callback_audio_source([buffer](auto a_p, auto a_n)
+							{
+								return buffer->sgetn(reinterpret_cast<char*>(a_p), a_n);
+							});
+						} else {
+							throw std::runtime_error("unknown Content-Type: " + match[1].str());
+						}
+					});
+					if (source) return source;
+				}
+			}
 		} catch (std::exception& e) {
 			std::fprintf(stderr, "caught: %s\n", e.what());
-			std::fprintf(stderr, "trying to resolve x-mpegurl...\n");
-			try {
-				std::string retry;
-				boost::asio::io_service io;
-				t_http10 http(a_url);
-				http("GET")(io, [&](auto& a_socket)
-				{
-					if (http.v_code != 200) throw std::runtime_error("invalid code");
-					std::regex content_type{"Content-Type:\\s*\\S+/x-mpegurl\\s*;?.*\r"};
-					if (std::none_of(http.v_headers.begin(), http.v_headers.end(), [&](auto a_x)
-					{
-						return std::regex_match(a_x, content_type);
-					})) throw std::runtime_error("did not match x-mpegurl");;
-					try {
-						boost::asio::read_until(a_socket, http.v_buffer, "\n");
-					} catch (...) {}
-					std::getline(std::istream(&http.v_buffer), retry);
-				});
-				std::fprintf(stderr, "opening: %s\n", retry.c_str());
-				return open(retry);
-			} catch (std::exception& e) {
-				std::fprintf(stderr, "caught: %s\n", e.what());
-				throw;
-			}
+			throw nullptr;
 		}
 	};
 }

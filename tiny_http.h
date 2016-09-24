@@ -152,7 +152,7 @@ struct t_http10
 			a_receive(a_socket);
 		};
 		boost::asio::ip::tcp::resolver resolver(a_io);
-		auto endpoint = resolver.resolve(boost::asio::ip::tcp::resolver::query(v_host, v_service));
+		auto endpoint = resolver.resolve({v_host, v_service});
 		if (v_service == "http") {
 			auto socket = std::make_shared<boost::asio::ip::tcp::socket>(a_io);
 			boost::asio::connect(*socket, endpoint);
@@ -194,7 +194,7 @@ struct t_http10
 			});
 		};
 		auto resolver = std::make_shared<boost::asio::ip::tcp::resolver>(a_io);
-		resolver->async_resolve(boost::asio::ip::tcp::resolver::query(v_host, v_service), [this, &a_io, check, send, resolver](auto a_ec, auto a_i)
+		resolver->async_resolve({v_host, v_service}, [this, &a_io, check, send, resolver](auto a_ec, auto a_i)
 		{
 			if (check(a_ec)) return;
 			if (v_service == "http") {

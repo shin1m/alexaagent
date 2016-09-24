@@ -9,10 +9,12 @@ int main(int argc, char* argv[])
 	{
 		std::fprintf(stderr, "%s %d%s\n", http.v_http.c_str(), http.v_code, http.v_message.c_str());
 		for (auto& header : http.v_headers) std::fprintf(stderr, "%s\n", header.c_str());
-		boost::asio::read_until(a_socket, http.v_buffer, "\n");
+		boost::system::error_code ec;
+		boost::asio::read(a_socket, http.v_buffer, ec);
+		if (ec != boost::asio::error::eof) throw ec;
+		std::fprintf(stderr, "\n");
 		std::string line;
-		std::getline(std::istream(&http.v_buffer), line);
-		std::fprintf(stderr, "\n%s\n", line.c_str());
+		while (std::getline(std::istream(&http.v_buffer), line)) std::fprintf(stderr, "%s\n", line.c_str());
 	});
 	return 0;
 }
