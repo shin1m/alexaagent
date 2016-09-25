@@ -25,7 +25,7 @@ protected:
 	AVCodecContext* v_codec = nullptr;
 
 public:
-	~t_audio_source()
+	virtual ~t_audio_source()
 	{
 		avcodec_close(v_codec);
 		avformat_close_input(&v_format);
@@ -202,7 +202,7 @@ public:
 		if (!v_codec) throw std::runtime_error("avcodec_alloc_context3");
 		if (avcodec_open2(v_codec, decoder, NULL) < 0) throw std::runtime_error("avcodec_open2");
 	}
-	~t_callback_audio_source()
+	virtual ~t_callback_audio_source()
 	{
 		av_freep(&v_io->buffer);
 		av_free(v_io);
