@@ -27,7 +27,7 @@ protected:
 public:
 	virtual ~t_audio_source()
 	{
-		avcodec_close(v_codec);
+		avcodec_free_context(&v_codec);
 		avformat_close_input(&v_format);
 	}
 };
@@ -168,7 +168,9 @@ struct t_url_audio_source : t_audio_source
 		AVCodec* decoder;
 		v_index = av_find_best_stream(v_format, AVMEDIA_TYPE_AUDIO, -1, -1, &decoder, 0);
 		if (v_index < 0) throw std::runtime_error("av_find_best_stream");
-		v_codec = v_format->streams[v_index]->codec;
+		v_codec = avcodec_alloc_context3(decoder);
+		if (!v_codec) throw std::runtime_error("avcodec_alloc_context3");
+		if (avcodec_parameters_to_context(v_codec, v_format->streams[v_index]->codecpar) < 0) throw std::runtime_error("avcodec_parameters_to_context");
 		if (avcodec_open2(v_codec, decoder, NULL) < 0) throw std::runtime_error("avcodec_open2");
 	}
 };
