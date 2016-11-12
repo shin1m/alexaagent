@@ -82,6 +82,64 @@ class t_audio_decoder
 		}
 		a_target(a_channels, sizeof(T_0), data.data(), data.size(), v_codec->sample_rate);
 	}
+	template<typename T_target>
+	void f_decode(T_target a_target, const AVPacket* a_packet)
+	{
+		int n = avcodec_send_packet(v_codec, a_packet);
+		if (n != 0) throw std::runtime_error("avcodec_send_packet: " + std::to_string(n));
+		while (true) {
+			int n = avcodec_receive_frame(v_codec, v_frame);
+			switch (n) {
+			case 0:
+				break;
+			case AVERROR(EAGAIN):
+			case AVERROR_EOF:
+				return;
+			default:
+				if (n < 0) throw std::runtime_error("avcodec_receive_frame: " + std::to_string(n));
+			}
+			int channels = v_codec->channels;
+			if (channels < 1) throw std::runtime_error("no channels");
+			if (channels > 2) {
+				std::fprintf(stderr, "too many channels: %d\n", channels);
+				channels = 2;
+			}
+			switch (v_codec->sample_fmt) {
+			case AV_SAMPLE_FMT_U8:
+				f_write<char, char>(channels, nullptr, a_target);
+				break;
+			case AV_SAMPLE_FMT_S16:
+				f_write<int16_t, int16_t>(channels, nullptr, a_target);
+				break;
+			case AV_SAMPLE_FMT_S32:
+				f_write<int16_t, int32_t>(channels, nullptr, a_target);
+				break;
+			case AV_SAMPLE_FMT_FLT:
+				f_write<int16_t, float>(channels, nullptr, a_target);
+				break;
+			case AV_SAMPLE_FMT_DBL:
+				f_write<int16_t, double>(channels, nullptr, a_target);
+				break;
+			case AV_SAMPLE_FMT_U8P:
+				f_write<char, char>(channels, true, a_target);
+				break;
+			case AV_SAMPLE_FMT_S16P:
+				f_write<int16_t, int16_t>(channels, true, a_target);
+				break;
+			case AV_SAMPLE_FMT_S32P:
+				f_write<int16_t, int32_t>(channels, true, a_target);
+				break;
+			case AV_SAMPLE_FMT_FLTP:
+				f_write<int16_t, float>(channels, true, a_target);
+				break;
+			case AV_SAMPLE_FMT_DBLP:
+				f_write<int16_t, double>(channels, true, a_target);
+				break;
+			default:
+				throw std::runtime_error("unknown sample format: " + std::to_string(v_codec->sample_fmt));
+			}
+		}
+	}
 
 public:
 	t_audio_decoder(t_audio_source& a_source) : v_format(a_source.v_format), v_index(a_source.v_index), v_codec(a_source.v_codec)
@@ -101,60 +159,10 @@ public:
 	void operator()(T_target a_target)
 	{
 		while (av_read_frame(v_format, &v_packet) >= 0) {
-			if (v_packet.stream_index != v_index) {
-				av_packet_unref(&v_packet);
-				continue;
-			}
-			while (v_packet.size > 0) {
-				int got;
-				int n = avcodec_decode_audio4(v_codec, v_frame, &got, &v_packet);
-				if (n < 0) throw std::runtime_error("avcodec_decode_audio4");
-				v_packet.data += n;
-				v_packet.size -= n;
-				if (got == 0) continue;
-				int channels = v_codec->channels;
-				if (channels < 1) throw std::runtime_error("no channels");
-				if (channels > 2) {
-					std::fprintf(stderr, "too many channels: %d\n", channels);
-					channels = 2;
-				}
-				switch (v_codec->sample_fmt) {
-				case AV_SAMPLE_FMT_U8:
-					f_write<char, char>(channels, nullptr, a_target);
-					break;
-				case AV_SAMPLE_FMT_S16:
-					f_write<int16_t, int16_t>(channels, nullptr, a_target);
-					break;
-				case AV_SAMPLE_FMT_S32:
-					f_write<int16_t, int32_t>(channels, nullptr, a_target);
-					break;
-				case AV_SAMPLE_FMT_FLT:
-					f_write<int16_t, float>(channels, nullptr, a_target);
-					break;
-				case AV_SAMPLE_FMT_DBL:
-					f_write<int16_t, double>(channels, nullptr, a_target);
-					break;
-				case AV_SAMPLE_FMT_U8P:
-					f_write<char, char>(channels, true, a_target);
-					break;
-				case AV_SAMPLE_FMT_S16P:
-					f_write<int16_t, int16_t>(channels, true, a_target);
-					break;
-				case AV_SAMPLE_FMT_S32P:
-					f_write<int16_t, int32_t>(channels, true, a_target);
-					break;
-				case AV_SAMPLE_FMT_FLTP:
-					f_write<int16_t, float>(channels, true, a_target);
-					break;
-				case AV_SAMPLE_FMT_DBLP:
-					f_write<int16_t, double>(channels, true, a_target);
-					break;
-				default:
-					throw std::runtime_error("unknown sample format");
-				}
-			}
+			if (v_packet.stream_index == v_index) f_decode(a_target, &v_packet);
 			av_packet_unref(&v_packet);
 		}
+		f_decode(a_target, NULL);
 	}
 };
 
