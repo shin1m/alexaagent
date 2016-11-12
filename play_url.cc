@@ -26,7 +26,7 @@ t_audio_source* f_open(const char* a_url)
 				if (match[1] == "x-mpegurl") {
 					std::fprintf(stderr, "found x-mpegurl.\n");
 					boost::asio::read_until(a_socket, http.v_buffer, '\n', ec);
-					if (ec && ec != boost::asio::error::eof) throw ec;
+					if (ec && ec != boost::asio::error::eof) throw boost::system::system_error(ec);
 					std::string line;
 					std::getline(std::istream(&http.v_buffer), line);
 					if (!std::regex_match(line, match, std::regex{"\\s*(https?://\\S+)\\s*\r?"})) throw std::runtime_error("invalid url");
@@ -34,7 +34,7 @@ t_audio_source* f_open(const char* a_url)
 				} else if (match[1] == "x-scpls") {
 					std::fprintf(stderr, "found x-scpls.\n");
 					boost::asio::read(a_socket, http.v_buffer, ec);
-					if (ec && ec != boost::asio::error::eof) throw ec;
+					if (ec && ec != boost::asio::error::eof) throw boost::system::system_error(ec);
 					auto buffer = std::make_shared<boost::asio::streambuf>();
 					std::ostream stream(buffer.get());
 					stream <<

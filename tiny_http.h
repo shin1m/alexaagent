@@ -169,20 +169,20 @@ struct t_http10
 	template<typename T_success, typename T_error>
 	void operator()(boost::asio::io_service& a_io, T_success a_success, T_error a_error)
 	{
-		auto check = [a_error](auto a_ec)
+		auto check = [a_error](auto a_ec) mutable
 		{
 			if (a_ec) a_error(a_ec);
 			return a_ec;
 		};
-		auto send = [this, a_success, check](auto& a_socket)
+		auto send = [this, a_success, check](auto& a_socket) mutable
 		{
-			boost::asio::async_write(*a_socket, v_buffer, [this, a_success, check, a_socket](auto a_ec, auto)
+			boost::asio::async_write(*a_socket, v_buffer, [this, a_success, check, a_socket](auto a_ec, auto) mutable
 			{
-				if (!check(a_ec)) boost::asio::async_read_until(*a_socket, v_buffer, "\r\n", [this, a_success, check, a_socket](auto a_ec, auto)
+				if (!check(a_ec)) boost::asio::async_read_until(*a_socket, v_buffer, "\r\n", [this, a_success, check, a_socket](auto a_ec, auto) mutable
 				{
 					if (check(a_ec)) return;
 					std::getline(std::istream(&v_buffer) >> v_http >> v_code, v_message);
-					boost::asio::async_read_until(*a_socket, v_buffer, "\r\n\r\n", [this, a_success, check, a_socket](auto a_ec, auto)
+					boost::asio::async_read_until(*a_socket, v_buffer, "\r\n\r\n", [this, a_success, check, a_socket](auto a_ec, auto) mutable
 					{
 						if (check(a_ec)) return;
 						std::istream stream(&v_buffer);
@@ -194,12 +194,12 @@ struct t_http10
 			});
 		};
 		auto resolver = std::make_shared<boost::asio::ip::tcp::resolver>(a_io);
-		resolver->async_resolve({v_host, v_service}, [this, &a_io, check, send, resolver](auto a_ec, auto a_i)
+		resolver->async_resolve({v_host, v_service}, [this, &a_io, check, send, resolver](auto a_ec, auto a_i) mutable
 		{
 			if (check(a_ec)) return;
 			if (v_service == "http") {
 				auto socket = std::make_shared<boost::asio::ip::tcp::socket>(a_io);
-				boost::asio::async_connect(*socket, a_i, [check, send, socket](auto a_ec, auto)
+				boost::asio::async_connect(*socket, a_i, [check, send, socket](auto a_ec, auto) mutable
 				{
 					if (!check(a_ec)) send(socket);
 				});
@@ -207,9 +207,9 @@ struct t_http10
 				auto tls = std::make_shared<boost::asio::ssl::context>(boost::asio::ssl::context::tlsv12);
 				tls->set_default_verify_paths();
 				auto socket = std::make_shared<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>(a_io, *tls);
-				boost::asio::async_connect(socket->lowest_layer(), a_i, [check, send, tls, socket](auto a_ec, auto)
+				boost::asio::async_connect(socket->lowest_layer(), a_i, [check, send, tls, socket](auto a_ec, auto) mutable
 				{
-					if (!check(a_ec)) socket->async_handshake(boost::asio::ssl::stream_base::client, [check, send, socket](auto a_ec)
+					if (!check(a_ec)) socket->async_handshake(boost::asio::ssl::stream_base::client, [check, send, socket](auto a_ec) mutable
 					{
 						if (!check(a_ec)) send(socket);
 					});

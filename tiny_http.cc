@@ -11,7 +11,7 @@ int main(int argc, char* argv[])
 		for (auto& header : http.v_headers) std::fprintf(stderr, "%s\n", header.c_str());
 		boost::system::error_code ec;
 		boost::asio::read(a_socket, http.v_buffer, ec);
-		if (ec != boost::asio::error::eof) throw ec;
+		if (ec != boost::asio::error::eof && ec != boost::asio::ssl::error::stream_truncated) throw boost::system::system_error(ec);
 		std::fprintf(stderr, "\n");
 		std::string line;
 		while (std::getline(std::istream(&http.v_buffer), line)) std::fprintf(stderr, "%s\n", line.c_str());
