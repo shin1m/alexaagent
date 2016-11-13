@@ -38,9 +38,8 @@ public:
 	}
 };
 
-class t_scheduler
+class t_scheduler : public boost::asio::io_service::strand
 {
-	boost::asio::io_service::strand v_strand;
 	std::set<std::unique_ptr<boost::asio::steady_timer>> v_timers;
 	std::set<t_task*> v_tasks;
 
@@ -48,7 +47,7 @@ class t_scheduler
 	void f_run_every(std::set<std::unique_ptr<boost::asio::steady_timer>>::iterator a_i, const boost::asio::steady_timer::duration& a_duration, T_callback a_callback)
 	{
 		(*a_i)->expires_from_now(a_duration);
-		(*a_i)->async_wait(v_strand.wrap([this, a_i, a_duration, a_callback](auto a_ec)
+		(*a_i)->async_wait(wrap([this, a_i, a_duration, a_callback](auto a_ec)
 		{
 			if (a_callback(a_ec))
 				this->f_run_every(a_i, a_duration, a_callback);
@@ -62,22 +61,18 @@ public:
 	{
 	};
 
-	t_scheduler(boost::asio::io_service& a_io) : v_strand(a_io)
+	t_scheduler(boost::asio::io_service& a_io) : boost::asio::io_service::strand(a_io)
 	{
-	}
-	boost::asio::io_service::strand& f_strand()
-	{
-		return v_strand;
 	}
 	boost::asio::io_service& f_io()
 	{
-		return v_strand.get_io_service();
+		return get_io_service();
 	}
 	template<typename T_callback>
 	boost::asio::steady_timer& f_run_in(const boost::asio::steady_timer::duration& a_duration, T_callback a_callback)
 	{
 		auto i = v_timers.insert(std::make_unique<boost::asio::steady_timer>(f_io(), a_duration)).first;
-		(*i)->async_wait(v_strand.wrap([this, i, a_callback](auto a_ec)
+		(*i)->async_wait(wrap([this, i, a_callback](auto a_ec)
 		{
 			a_callback(a_ec);
 			v_timers.erase(i);
@@ -94,7 +89,7 @@ public:
 	template<typename T_main>
 	void f_spawn(T_main&& a_main)
 	{
-		boost::asio::spawn(v_strand, [this, a_main = std::move(a_main)](auto a_yield)
+		boost::asio::spawn(static_cast<boost::asio::io_service::strand&>(*this), [this, a_main = std::move(a_main)](auto a_yield)
 		{
 			t_task task(a_yield, this->f_io());
 			auto i = v_tasks.insert(&task).first;

@@ -5,13 +5,21 @@
 #include "tiny_http.h"
 
 template<typename T_server>
-void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
+void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server, std::function<void()> a_ready)
 {
 	std::map<std::string, std::function<void(const picojson::value&)>> handlers{
-		{"hello", [&](auto a_x)
+		{"hello", [&](auto)
 		{
 			a_session->v_state_changed();
 			a_session->v_options_changed();
+		}},
+		{"connect", [&](auto)
+		{
+			a_session->f_connect();
+		}},
+		{"disconnect", [&](auto)
+		{
+			a_session->f_disconnect();
 		}},
 		{"capture.threshold", [&](auto a_x)
 		{
@@ -63,21 +71,18 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 		}}
 	};
 	auto& ws = a_server->endpoint["^/session$"];
-	ws.onmessage = [&](auto a_connection, auto a_message)
+	ws.onmessage = a_session->f_scheduler().wrap([&](auto a_connection, auto a_message)
 	{
 		auto s = a_message->string();
 		std::fprintf(stderr, "on message: %s\n", s.c_str());
 		picojson::value message;
 		picojson::parse(message, s.begin(), s.end(), nullptr);
-		a_session->f_scheduler().f_strand().dispatch([&, message = std::move(message)]
-		{
-			try {
-				for (auto& x : message.get<picojson::value::object>()) handlers.at(x.first)(x.second);
-			} catch (std::exception& e) {
-				std::fprintf(stderr, "failed: %s\n", e.what());
-			}
-		});
-	};
+		try {
+			for (auto& x : message.get<picojson::value::object>()) handlers.at(x.first)(x.second);
+		} catch (std::exception& e) {
+			std::fprintf(stderr, "failed: %s\n", e.what());
+		}
+	});
 	auto send = [&](const std::string& a_name, picojson::value::object&& a_values)
 	{
 		auto message = picojson::value(picojson::value::object{
@@ -106,6 +111,7 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 			{"active", picojson::value(x.second.f_active())}
 		}));
 		send("state_changed", {
+			{"online", picojson::value(a_session->f_online())},
 			{"dialog", picojson::value(picojson::value::object{
 				{"active", picojson::value(a_session->f_dialog_active())},
 				{"playing", picojson::value(a_session->f_dialog_playing())},
@@ -137,6 +143,7 @@ void f_web_socket(t_session* a_session, std::shared_ptr<T_server> a_server)
 			})}
 		});
 	};
+	a_session->f_scheduler().dispatch(a_ready);
 	a_server->start();
 }
 
@@ -166,7 +173,7 @@ void f_override_open_audio_by_url(t_session& a_session)
 						if (match[1] == "x-mpegurl") {
 							std::fprintf(stderr, "found x-mpegurl.\n");
 							boost::asio::read_until(a_socket, http.v_buffer, '\n', ec);
-							if (ec && ec != boost::asio::error::eof) throw ec;
+							if (ec && ec != boost::asio::error::eof) throw boost::system::system_error(ec);
 							std::string line;
 							std::getline(std::istream(&http.v_buffer), line);
 							if (!std::regex_match(line, match, std::regex{"\\s*(https?://\\S+)\\s*\r?"})) throw std::runtime_error("invalid url");
@@ -174,7 +181,7 @@ void f_override_open_audio_by_url(t_session& a_session)
 						} else if (match[1] == "x-scpls") {
 							std::fprintf(stderr, "found x-scpls.\n");
 							boost::asio::read(a_socket, http.v_buffer, ec);
-							if (ec && ec != boost::asio::error::eof) throw ec;
+							if (ec && ec != boost::asio::error::eof) throw boost::system::system_error(ec);
 							auto buffer = std::make_shared<boost::asio::streambuf>();
 							std::ostream stream(buffer.get());
 							stream <<
@@ -233,24 +240,32 @@ int main(int argc, char* argv[])
 	std::unique_ptr<t_session> session;
 	std::thread wsthread;
 	std::function<void()> wsstop;
-	auto start = [&](auto a_server)
+	auto start = [&](auto a_ready)
 	{
+		session.reset(new t_session(*scheduler, sounds));
 		f_override_open_audio_by_url(*session);
-		wsthread = std::thread(std::bind(f_web_socket<typename decltype(a_server)::element_type>, session.get(), a_server));
-		wsstop = [a_server]
+		auto wsstart = [&](auto a_server)
 		{
-			a_server->stop();
+			wsthread = std::thread(std::bind(f_web_socket<typename decltype(a_server)::element_type>, session.get(), a_server, a_ready));
+			wsstop = [a_server]
+			{
+				a_server->stop();
+			};
 		};
+		if (service_key.empty())
+			wsstart(std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WS>>(wsport));
+		else
+			wsstart(std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WSS>>(wsport, 1, service / "certificate"_jss, service_key));
 	};
 	std::function<void(const std::string&)> refresh;
-	auto grant = [&](std::map<std::string, std::string>&& a_query, std::function<void()> a_done)
+	auto grant = [&](std::map<std::string, std::string>&& a_query, std::function<void(const boost::system::error_code&)> a_done)
 	{
 		a_query.emplace("client_id", profile / "client_id"_jss);
 		a_query.emplace("client_secret", profile / "client_secret"_jss);
 		auto http = std::make_shared<t_http10>("https://api.amazon.com/auth/o2/token");
 		(*http)("POST", a_query)(*server.io_services().front(), [&, a_done, http](auto a_socket)
 		{
-			boost::asio::async_read(*a_socket, http->v_buffer, [&, a_done, http, a_socket](auto a_ec, auto)
+			boost::asio::async_read(*a_socket, http->v_buffer, scheduler->wrap([&, a_done, http, a_socket](auto a_ec, auto)
 			{
 				std::istream stream(&http->v_buffer);
 				picojson::value result;
@@ -263,34 +278,41 @@ int main(int argc, char* argv[])
 					size_t expires_in = result / "expires_in"_jsn;
 					auto refresh_token = result / "refresh_token"_jss;
 					std::ofstream("session/token") << refresh_token;
-					if (session) {
-						session->f_token(access_token);
-					} else {
-						session.reset(new t_session(*scheduler, access_token, sounds));
-						if (service_key.empty())
-							start(std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WS>>(wsport));
-						else
-							start(std::make_shared<SimpleWeb::SocketServer<SimpleWeb::WSS>>(wsport, 1, service / "certificate"_jss, service_key));
-					}
+					session->f_token(access_token);
 					scheduler->f_run_in(std::chrono::seconds(expires_in), [&, refresh_token](auto)
 					{
 						refresh(refresh_token);
 					});
+					a_done({});
+				} else {
+					a_done(boost::system::errc::make_error_code(boost::system::errc::protocol_error));
 				}
-				a_done();
-			});
-		}, [a_done](auto a_ec)
+			}));
+		}, scheduler->wrap([a_done](auto a_ec)
 		{
 			std::fprintf(stderr, "grant: %s\n", a_ec.message().c_str());
-			a_done();
-		});
+			a_done(a_ec);
+		}));
 	};
+	size_t refresh_retry_interval = 1;
 	refresh = [&](const std::string& a_token)
 	{
 		grant({
 			{"grant_type", "refresh_token"},
 			{"refresh_token", a_token}
-		}, [] {});
+		}, [&, a_token](auto a_ec)
+		{
+			if (a_ec) {
+				std::fprintf(stderr, "retry in %d seconds.\n", refresh_retry_interval);
+				scheduler->f_run_in(std::chrono::seconds(refresh_retry_interval), [&, a_token](auto)
+				{
+					refresh(a_token);
+				});
+				if (refresh_retry_interval < 256) refresh_retry_interval *= 2;
+			} else {
+				refresh_retry_interval = 1;
+			}
+		});
 	};
 	server.handle("/", [&](auto& a_request, auto& a_response)
 	{
@@ -317,45 +339,76 @@ int main(int argc, char* argv[])
 	});
 	server.handle("/grant", [&](auto& a_request, auto& a_response)
 	{
-		auto f = std::bind(nghttp2::asio_http2::server::redirect_handler(302, "/"), std::ref(a_request), std::ref(a_response));
+		auto redirect = nghttp2::asio_http2::server::redirect_handler(302, "/");
 		auto values = f_parse_query_string(a_request.uri().raw_query);
 		auto i = values.find("code");
-		if (i == values.end())
-			f();
-		else
-			grant({
-				{"grant_type", "authorization_code"},
-				{"code", i->second},
-				{"redirect_uri", profile / "redirect_uri"_jss}
-			}, f);
+		if (i == values.end()) {
+			redirect(a_request, a_response);
+		} else {
+			scheduler->dispatch(std::bind(start, [&]
+			{
+				grant({
+					{"grant_type", "authorization_code"},
+					{"code", i->second},
+					{"redirect_uri", profile / "redirect_uri"_jss}
+				}, [&, redirect](auto)
+				{
+					redirect(a_request, a_response);
+				});
+			}));
+		}
 	});
 	server.handle("/session", [&](auto&, auto& a_response)
 	{
 		a_response.write_head(200);
 		a_response.end((service_key.empty() ? "ws://" : "wss://") + service_host + ':' + std::to_string(wsport) + "/session");
 	});
+	server.handle("/connect", [&](auto& a_request, auto& a_response)
+	{
+		scheduler->dispatch([&]
+		{
+			session->f_connect();
+		});
+		a_response.write_head(200);
+		a_response.end();
+	});
+	server.handle("/disconnect", [&](auto& a_request, auto& a_response)
+	{
+		scheduler->dispatch([&]
+		{
+			session->f_disconnect();
+		});
+		a_response.write_head(200);
+		a_response.end();
+	});
 	boost::asio::ssl::context tls(boost::asio::ssl::context::tlsv12);
 	boost::system::error_code ec;
 	if (service_key.empty()) {
-		if (server.listen_and_serve(ec, service_host, http2port, true)) throw std::runtime_error(ec.message());
+		if (server.listen_and_serve(ec, service_host, http2port, true)) throw boost::system::system_error(ec);
 	} else {
 		tls.use_private_key_file(service_key, boost::asio::ssl::context::pem);
 		tls.use_certificate_chain_file(service / "certificate"_jss);
 		nghttp2::asio_http2::server::configure_tls_context_easy(ec, tls);
-		if (server.listen_and_serve(ec, tls, service_host, http2port, true)) throw std::runtime_error(ec.message());
+		if (server.listen_and_serve(ec, tls, service_host, http2port, true)) throw boost::system::system_error(ec);
 	}
 	scheduler.reset(new t_scheduler(*server.io_services().front()));
 	boost::asio::signal_set signals(*server.io_services().front(), SIGINT);
-	signals.async_wait([&](auto, auto a_signal)
+	signals.async_wait(scheduler->wrap([&](auto, auto a_signal)
 	{
 		std::fprintf(stderr, "\ncaught signal: %d\n", a_signal);
-		scheduler->f_shutdown(std::bind(&nghttp2::asio_http2::server::http2::stop, std::ref(server)));
+		scheduler->f_shutdown([&]
+		{
+			server.stop();
+		});
 		if (wsstop) wsstop();
-	});
+	}));
 	{
 		std::string token;
 		std::ifstream("session/token") >> token;
-		if (!token.empty()) refresh(token);
+		if (!token.empty()) scheduler->dispatch(std::bind(start, [&, token]
+		{
+			refresh(token);
+		}));
 	}
 	server.join();
 	if (wsthread.joinable()) wsthread.join();

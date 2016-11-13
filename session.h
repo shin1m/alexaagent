@@ -186,7 +186,7 @@ private:
 			auto name = header / "name"_jss;
 			std::fprintf(stderr, "parser(%p) directive: %s.%s\n", this, ns.c_str(), name.c_str());
 			try {
-				v_session.v_handlers.at(std::make_pair(ns, name))(directive);
+				v_session.v_handlers.at({ns, name})(directive);
 			} catch (std::exception& e) {
 				v_session.f_exception_encountered(ns + '.' + name, "UNSUPPORTED_OPERATION", e.what());
 			}
@@ -260,11 +260,13 @@ private:
 	nghttp2::asio_http2::header_map v_header;
 	ALuint v_sounds[4];
 	std::unique_ptr<nghttp2::asio_http2::client::session> v_session;
-	bool v_ready = false;
+	bool v_online = false;
+	boost::asio::steady_timer* v_reconnecting = nullptr;
+	size_t v_reconnecting_interval = 1;
 	size_t v_message_id = 0;
 	size_t v_dialog_id = 0;
 	std::map<std::pair<std::string, std::string>, std::function<void(const picojson::value&)>> v_handlers{
-		{std::make_pair("SpeechRecognizer", "ExpectSpeech"), [this](const picojson::value& a_directive)
+		{{"SpeechRecognizer", "ExpectSpeech"}, [this](auto a_directive)
 		{
 			auto& payload = a_directive / "directive" / "payload";
 			v_dialog->f_queue([this, dialog_id = a_directive / "directive" / "header" * "dialogRequestId" | std::string(), timeout = static_cast<int>((payload / "timeoutInMilliseconds"_jsn))]
@@ -276,7 +278,7 @@ private:
 					std::fprintf(stderr, "expecting speech within %dms.\n", timeout);
 					v_expecting_timeout = &v_scheduler.f_run_in(std::chrono::milliseconds(timeout), [this](auto a_ec)
 					{
-						if (a_ec == boost::asio::error::operation_aborted) return;
+						if (!v_expecting_speech) return;
 						v_expecting_speech = nullptr;
 						v_expecting_timeout = nullptr;
 						this->f_empty_event("SpeechRecognizer", "ExpectSpeechTimedOut");
@@ -288,7 +290,7 @@ private:
 				do v_dialog->v_task.f_wait(); while (v_expecting_speech);
 			});
 		}},
-		{std::make_pair("Alerts", "SetAlert"), [this](const picojson::value& a_directive)
+		{{"Alerts", "SetAlert"}, [this](auto a_directive)
 		{
 			auto& payload = a_directive / "directive" / "payload";
 			auto token = payload / "token"_jss;
@@ -301,7 +303,7 @@ private:
 				this->f_alerts_event("SetAlertFailed", token);
 			}
 		}},
-		{std::make_pair("Alerts", "DeleteAlert"), [this](const picojson::value& a_directive)
+		{{"Alerts", "DeleteAlert"}, [this](auto a_directive)
 		{
 			auto& payload = a_directive / "directive" / "payload";
 			auto token = payload / "token"_jss;
@@ -314,7 +316,7 @@ private:
 				this->f_alerts_event("DeleteAlertFailed", token);
 			}
 		}},
-		{std::make_pair("AudioPlayer", "Play"), [this](const picojson::value& a_directive)
+		{{"AudioPlayer", "Play"}, [this](const picojson::value& a_directive)
 		{
 			auto& payload = a_directive / "directive" / "payload";
 			auto behavior = payload / "playBehavior"_jss;
@@ -352,7 +354,7 @@ private:
 					std::thread([&]
 					{
 						try {
-							v_scheduler.f_strand().dispatch([&, source = v_open_audio_by_url(url)]
+							v_scheduler.dispatch([&, source = v_open_audio_by_url(url)]
 							{
 								v_content->v_task.f_post([source](auto)
 								{
@@ -360,7 +362,7 @@ private:
 								});
 							});
 						} catch (...) {
-							v_scheduler.f_strand().dispatch([&, e = std::current_exception()]
+							v_scheduler.dispatch([&, e = std::current_exception()]
 							{
 								v_content->v_task.f_post([e](auto)
 								{
@@ -422,11 +424,11 @@ private:
 				return true;
 			});
 		}},
-		{std::make_pair("AudioPlayer", "Stop"), [this](const picojson::value&)
+		{{"AudioPlayer", "Stop"}, [this](auto)
 		{
 			v_content->f_stop();
 		}},
-		{std::make_pair("AudioPlayer", "ClearQueue"), [this](const picojson::value& a_directive)
+		{{"AudioPlayer", "ClearQueue"}, [this](auto a_directive)
 		{
 			auto& payload = a_directive / "directive" / "payload";
 			auto behavior = payload / "clearBehavior"_jss;
@@ -438,19 +440,19 @@ private:
 			}
 			this->f_empty_event("AudioPlayer", "PlaybackQueueCleared");
 		}},
-		{std::make_pair("Speaker", "SetVolume"), [this](const picojson::value& a_directive)
+		{{"Speaker", "SetVolume"}, [this](auto a_directive)
 		{
 			f_speaker_volume(a_directive / "directive" / "payload" / "volume"_jsn);
 		}},
-		{std::make_pair("Speaker", "AdjustVolume"), [this](const picojson::value& a_directive)
+		{{"Speaker", "AdjustVolume"}, [this](auto a_directive)
 		{
 			f_speaker_volume(v_speaker_volume + a_directive / "directive" / "payload" / "volume"_jsn);
 		}},
-		{std::make_pair("Speaker", "SetMute"), [this](const picojson::value& a_directive)
+		{{"Speaker", "SetMute"}, [this](auto a_directive)
 		{
 			f_speaker_muted(a_directive / "directive" / "payload" / "mute"_jsb);
 		}},
-		{std::make_pair("SpeechSynthesizer", "Speak"), [this](const picojson::value& a_directive)
+		{{"SpeechSynthesizer", "Speak"}, [this](auto a_directive)
 		{
 			auto& payload = a_directive / "directive" / "payload";
 			v_dialog->f_queue([this, token = payload / "token"_jss, audio = std::make_shared<t_attached_audio>(*this, v_dialog->v_task, (payload / "url"_jss).substr(4))]
@@ -482,7 +484,7 @@ private:
 				if (v_state_changed) v_state_changed();
 			});
 		}},
-		{std::make_pair("System", "ResetUserInactivity"), [this](const picojson::value&)
+		{{"System", "ResetUserInactivity"}, [this](auto)
 		{
 			v_last_activity = std::chrono::steady_clock::now();
 		}}
@@ -512,13 +514,18 @@ private:
 
 	void f_reconnect()
 	{
-		std::fprintf(stderr, "reconnecting...\n");
-		v_ready = false;
-		if (v_session) {
-			v_session->shutdown();
-			v_session.reset();
-		}
-		f_connect();
+		f_disconnect();
+		std::fprintf(stderr, "reconnect in %d seconds.\n", v_reconnecting_interval);
+		v_reconnecting = &v_scheduler.f_run_in(std::chrono::seconds(v_reconnecting_interval), [this](auto a_ec)
+		{
+			if (v_reconnecting) {
+				v_reconnecting = nullptr;
+				this->f_connect();
+			} else {
+				v_reconnecting_interval = 1;
+			}
+		});
+		if (v_reconnecting_interval < 256) v_reconnecting_interval *= 2;
 	}
 	picojson::value f_context() const
 	{
@@ -613,8 +620,8 @@ private:
 	template<typename T_data>
 	const nghttp2::asio_http2::client::request* f_post(T_data a_data)
 	{
-		if (!v_ready) {
-			std::fprintf(stderr, "not ready.\n");
+		if (!v_online) {
+			std::fprintf(stderr, "offline.\n");
 			return nullptr;
 		}
 		boost::system::error_code ec;
@@ -679,7 +686,7 @@ private:
 		}
 		auto i = v_alerts.emplace(a_token, t_alert(a_type, a_at)).first;
 		i->second.v_timer.reset(new boost::asio::system_timer(v_scheduler.f_io(), at));
-		i->second.v_timer->async_wait([this, i](auto a_ec)
+		i->second.v_timer->async_wait(v_scheduler.wrap([this, i](auto a_ec)
 		{
 			if (a_ec == boost::asio::error::operation_aborted) {
 				v_alerts.erase(i);
@@ -692,7 +699,7 @@ private:
 				i->second.f_play(v_sounds[(i->second.v_type == "TIMER" ? 0 : 2) + (v_dialog_active ? 1 : 0)], v_dialog_active ? 1.0f / 16.0f : 1.0f);
 				this->f_alerts_event("AlertStarted", i->first);
 				i->second.v_timer->expires_from_now(std::chrono::seconds(v_alerts_duration));
-				i->second.v_timer->async_wait([this, i](auto)
+				i->second.v_timer->async_wait(v_scheduler.wrap([this, i](auto)
 				{
 					this->f_alerts_event("AlertStopped", i->first);
 					v_alerts.erase(i);
@@ -700,14 +707,14 @@ private:
 					if (v_dialog_active) return;
 					for (auto& x : v_alerts) if (x.second.v_source) return;
 					this->f_player_foreground();
-				});
+				}));
 				if (v_state_changed) v_state_changed();
 			};
 			if (v_dialog_active)
 				f();
 			else
 				this->f_player_background(f);
-		});
+		}));
 	}
 	void f_alerts_delete(const std::string& a_token)
 	{
@@ -742,24 +749,19 @@ private:
 		} else if (v_content_pausing) {
 			a_done();
 		} else {
-			auto timer = std::make_shared<boost::asio::steady_timer>(v_scheduler.f_io(), std::chrono::duration<int>::max());
-			v_content->v_task.f_post([this, timer](auto)
+			v_content->v_task.f_post([this, a_done](auto)
 			{
 				if (!v_content->v_playing.empty()) {
 					alSourcePause(v_content->v_target);
 					this->f_player_event("PlaybackPaused");
 				}
 				v_content_pausing = true;
-				timer->cancel();
+				a_done();
 				do v_content->v_task.f_wait(); while (v_content_pausing);
 				if (!v_content->v_playing.empty()) {
 					alSourcePlay(v_content->v_target);
 					this->f_player_event("PlaybackResumed");
 				}
-			});
-			timer->async_wait([a_done](auto)
-			{
-				a_done();
 			});
 		}
 	}
@@ -859,7 +861,7 @@ private:
 				continue;
 			}
 			alcCaptureStart(device.get());
-			auto queue = std::make_shared<std::pair<std::deque<char>, bool>>(std::make_pair(std::deque<char>(), false));
+			auto queue = std::make_shared<std::pair<std::deque<char>, bool>>(std::deque<char>(), false);
 			auto& deque = queue->first;
 			char buffer[320];
 			const size_t window = sizeof(buffer) * 100;
@@ -953,74 +955,6 @@ private:
 		}).serialize(std::ostreambuf_iterator<char>(s), true);
 		if (v_options_changed) v_options_changed();
 	}
-	void f_load()
-	{
-		try {
-			picojson::value options;
-			std::ifstream s("session/options.json");
-			s >> options;
-			v_alerts_duration = options / "alerts_duration"_jsn;
-			v_content_can_play_in_background = options / "content_can_play_in_background"_jsb;
-			v_capture_threshold = options / "capture_threshold"_jsn;
-			v_capture_auto = options / "capture_auto"_jsb;
-		} catch (std::exception& e) {
-			f_exception_encountered(std::string(), "INTERNAL_ERROR", e.what());
-		}
-		try {
-			picojson::value alerts;
-			std::ifstream s("session/alerts.json");
-			s >> alerts;
-			for (auto& x : alerts.get<picojson::value::object>()) f_alerts_set(x.first, x.second / "type"_jss, x.second / "scheduledTime"_jss);
-		} catch (std::exception& e) {
-			f_exception_encountered(std::string(), "INTERNAL_ERROR", e.what());
-		}
-		try {
-			picojson::value speaker;
-			std::ifstream s("session/speaker.json");
-			s >> speaker;
-			v_speaker_volume = speaker / "volume"_jsn;
-			v_speaker_muted = speaker / "muted"_jsb;
-		} catch (std::exception& e) {
-			f_exception_encountered(std::string(), "INTERNAL_ERROR", e.what());
-		}
-		f_speaker_apply();
-	}
-	void f_connect()
-	{
-		v_session.reset(new nghttp2::asio_http2::client::session(v_scheduler.f_io(), v_tls, "avs-alexa-na.amazon.com", "https"));
-		v_session->read_timeout(boost::posix_time::hours(1));
-		std::fprintf(stderr, "session(%p) created\n", v_session.get());
-		v_session->on_connect([this](auto)
-		{
-			boost::system::error_code ec;
-			auto request = v_session->submit(ec, "GET", "https://avs-alexa-na.amazon.com/v20160207/directives", v_header);
-			if (!request) {
-				std::fprintf(stderr, "directives GET failed: %s\n", ec.message().c_str());
-				this->f_reconnect();
-				return;
-			}
-			std::fprintf(stderr, "directives GET(%p) opened.\n", request);
-			request->on_response([this, request](auto& a_response)
-			{
-				std::fprintf(stderr, "directives GET(%p) ", request);
-				this->f_setup(a_response);
-				v_ready = true;
-				auto metadata = this->f_metadata("System", "SynchronizeState", {});
-				metadata << "context" & this->f_context();
-				this->f_event(metadata);
-				this->f_load();
-			});
-			request->on_close([request](auto a_code)
-			{
-				std::fprintf(stderr, "directives GET(%p) on close: %d\n", request, a_code);
-			});
-		});
-		v_session->on_error([this](auto a_ec)
-		{
-			std::fprintf(stderr, "session(%p) on error: %s\n", v_session.get(), a_ec.message().c_str());
-			this->f_reconnect();
-		});
-	}
 	void f_load_sound(ALuint a_buffer, const std::string& a_path)
 	{
 		t_url_audio_source source(a_path.c_str());
@@ -1046,17 +980,45 @@ public:
 		return new t_url_audio_source(a_url.c_str());
 	};
 
-	t_session(t_scheduler& a_scheduler, const std::string& a_token, const picojson::value& a_sounds) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler)
+	t_session(t_scheduler& a_scheduler, const picojson::value& a_sounds) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler)
 	{
 		v_tls.set_default_verify_paths();
 		boost::system::error_code ec;
 		nghttp2::asio_http2::client::configure_tls_context(ec, v_tls);
-		f_token(a_token);
 		alGenBuffers(4, v_sounds);
 		f_load_sound(v_sounds[0], a_sounds / "timer" / "foreground"_jss);
 		f_load_sound(v_sounds[1], a_sounds / "timer" / "background"_jss);
 		f_load_sound(v_sounds[2], a_sounds / "alarm" / "foreground"_jss);
 		f_load_sound(v_sounds[3], a_sounds / "alarm" / "background"_jss);
+		try {
+			picojson::value options;
+			std::ifstream s("session/options.json");
+			s >> options;
+			v_alerts_duration = options / "alerts_duration"_jsn;
+			v_content_can_play_in_background = options / "content_can_play_in_background"_jsb;
+			v_capture_threshold = options / "capture_threshold"_jsn;
+			v_capture_auto = options / "capture_auto"_jsb;
+		} catch (std::exception& e) {
+			std::fprintf(stderr, "session/options.json: %s\n", e.what());
+		}
+		try {
+			picojson::value alerts;
+			std::ifstream s("session/alerts.json");
+			s >> alerts;
+			for (auto& x : alerts.get<picojson::value::object>()) f_alerts_set(x.first, x.second / "type"_jss, x.second / "scheduledTime"_jss);
+		} catch (std::exception& e) {
+			std::fprintf(stderr, "session/alerts.json: %s\n", e.what());
+		}
+		try {
+			picojson::value speaker;
+			std::ifstream s("session/speaker.json");
+			s >> speaker;
+			v_speaker_volume = speaker / "volume"_jsn;
+			v_speaker_muted = speaker / "muted"_jsb;
+		} catch (std::exception& e) {
+			std::fprintf(stderr, "session/speaker.json: %s\n", e.what());
+		}
+		f_speaker_apply();
 		auto run = [](const char* a_name, auto a_run)
 		{
 			while (true) {
@@ -1104,7 +1066,6 @@ public:
 			}));
 			return true;
 		});
-		f_connect();
 	}
 	~t_session()
 	{
@@ -1114,12 +1075,72 @@ public:
 	{
 		return v_scheduler;
 	}
+	bool f_online() const
+	{
+		return v_online;
+	}
+	void f_connect()
+	{
+		if (v_reconnecting) {
+			v_reconnecting->cancel();
+			v_reconnecting = nullptr;
+		}
+		if (v_session) return;
+		v_session.reset(new nghttp2::asio_http2::client::session(v_scheduler.f_io(), v_tls, "avs-alexa-na.amazon.com", "https"));
+		v_session->read_timeout(boost::posix_time::hours(1));
+		std::fprintf(stderr, "session(%p) created\n", v_session.get());
+		v_session->on_connect([this](auto)
+		{
+			boost::system::error_code ec;
+			auto request = v_session->submit(ec, "GET", "https://avs-alexa-na.amazon.com/v20160207/directives", v_header);
+			if (!request) {
+				std::fprintf(stderr, "directives GET failed: %s\n", ec.message().c_str());
+				this->f_reconnect();
+				return;
+			}
+			std::fprintf(stderr, "directives GET(%p) opened.\n", request);
+			request->on_response([this, request](auto& a_response)
+			{
+				std::fprintf(stderr, "directives GET(%p) ", request);
+				this->f_setup(a_response);
+				v_online = true;
+				v_reconnecting_interval = 1;
+				auto metadata = this->f_metadata("System", "SynchronizeState", {});
+				metadata << "context" & this->f_context();
+				this->f_event(metadata);
+				if (v_state_changed) v_state_changed();
+			});
+			request->on_close([request](auto a_code)
+			{
+				std::fprintf(stderr, "directives GET(%p) on close: %d\n", request, a_code);
+			});
+		});
+		v_session->on_error([this](auto a_ec)
+		{
+			std::fprintf(stderr, "session(%p) on error: %s\n", v_session.get(), a_ec.message().c_str());
+			this->f_reconnect();
+		});
+	}
+	void f_disconnect()
+	{
+		if (v_reconnecting) {
+			v_reconnecting->cancel();
+			v_reconnecting = nullptr;
+		}
+		v_online = false;
+		if (v_session) {
+			v_session->shutdown();
+			v_session.reset();
+		}
+		if (v_state_changed) v_state_changed();
+	}
 	void f_token(const std::string& a_token)
 	{
 		v_header = nghttp2::asio_http2::header_map{
 			{"authorization", {"Bearer " + a_token, true}},
 			{"content-type", {"multipart/form-data; boundary=this-is-a-boundary", true}}
 		};
+		f_connect();
 	}
 	bool f_dialog_active() const
 	{

@@ -3,8 +3,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Alexa Voice Service Agent</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
-<link rel="stylesheet" href="https://code.getmdl.io/1.2.0/material.light_blue-blue.min.css">
-<script defer src="https://code.getmdl.io/1.2.0/material.min.js"></script>
+<link rel="stylesheet" href="https://code.getmdl.io/1.2.1/material.light_blue-blue.min.css">
+<script defer src="https://code.getmdl.io/1.2.1/material.min.js"></script>
 <style>
 .flex-container {
   display: flex;
@@ -58,7 +58,16 @@
 #alerts div button {
   margin-left: 0.75em;
 }
-#recognizer, #playback, #alerts {
+#connection.online .connect i {
+  color: dodgerblue;
+}
+#connection .disconnect i {
+  color: dodgerblue;
+}
+#connection.online .disconnect i {
+  color: black;
+}
+#recognizer, #playback, #alerts, #connection {
   text-align: center;
 }
 </style>
@@ -84,6 +93,9 @@ document.addEventListener("DOMContentLoaded", function() {
   var alerts_duration = options.querySelector(".alerts-duration");
   var capture_auto = options.querySelector(".capture-auto input");
   var content_background = options.querySelector(".content-background input");
+  var connection = document.getElementById("connection");
+  var connect = connection.querySelector(".connect");
+  var disconnect = connection.querySelector(".disconnect");
   var notification = document.querySelector(".mdl-js-snackbar");
   var toast = function(message) {
     notification.MaterialSnackbar.showSnackbar({message: message});
@@ -142,6 +154,15 @@ document.addEventListener("DOMContentLoaded", function() {
       }, false);
       capture_auto.addEventListener("change", check_sender("capture.auto", capture_auto), false);
       content_background.addEventListener("change", check_sender("content.background", content_background), false);
+      var poster = function(path) {
+        return function() {
+          var xhr = new XMLHttpRequest();
+          xhr.open("POST", path);
+          xhr.send();
+        };
+      };
+      connect.addEventListener("click", poster("connect"), false);
+      disconnect.addEventListener("click", poster("disconnect"), false);
       send({hello: null});
     };
     var threshold;
@@ -216,10 +237,12 @@ document.addEventListener("DOMContentLoaded", function() {
       }
       var state = data.state_changed;
       if (state !== undefined) {
-        recognizer.classList[state.dialog.active ? "add" : "remove"]("active");
-        recognize_icon.innerText = state.dialog.expecting_speech ? "help" : state.dialog.playing ? "record_voice_over" : "mic";
-        speaker.classList[state.content.playing ? "add" : "remove"]("playing");
+        recognize.MaterialButton[state.online ? "enable" : "disable"]();
+        recognizer.classList[state.online && state.dialog.active ? "add" : "remove"]("active");
+        recognize_icon.innerText = !state.online ? "mic_off" : state.dialog.expecting_speech ? "help" : state.dialog.playing ? "record_voice_over" : "mic";
+        speaker.classList[state.online && state.content.playing ? "add" : "remove"]("playing");
         updateAlerts(state.alerts);
+        connection.classList[state.online ? "add" : "remove"]("online");
       }
       var options = data.options_changed;
       if (options !== undefined) {
@@ -285,6 +308,10 @@ document.addEventListener("DOMContentLoaded", function() {
             <span class="mdl-switch__label">Content Can Play In Background</span>
           </label>
         </div>
+      </div>
+      <div id="connection" class="mdl-cell mdl-cell--12-col">
+        <button class="mdl-button mdl-js-button mdl-js-ripple-effect connect"><i class="material-icons">network_wifi</i></button>
+        <button class="mdl-button mdl-js-button mdl-js-ripple-effect disconnect"><i class="material-icons">signal_wifi_off</i></button>
       </div>
     </div>
   </main>
