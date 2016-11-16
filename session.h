@@ -2,8 +2,7 @@
 #define ALEXAAGENT__SESSION_H
 
 #include <deque>
-#include <fstream>
-#include <cstdio>
+#include <ostream>
 #include <boost/asio/system_timer.hpp>
 #include <nghttp2/asio_http2_client.h>
 
@@ -11,6 +10,14 @@
 #include "multipart.h"
 #include "audio.h"
 #include "scheduler.h"
+
+enum t_severity
+{
+	e_severity__TRACE,
+	e_severity__INFORMATION,
+	e_severity__ERROR,
+	e_severity__NEVER
+};
 
 class t_session
 {
@@ -178,13 +185,11 @@ private:
 		{
 			picojson::value directive;
 			picojson::parse(directive, std::istreambuf_iterator<char>(&v_metadata), std::istreambuf_iterator<char>(), nullptr);
-#ifdef ALEXAAGENT_LOG
-			std::fprintf(stderr, "json: %s\n", directive.serialize(true).c_str());
-#endif
+			if (v_session.v_log) v_session.v_log(e_severity__TRACE) << "json: " << directive.serialize(true) << std::endl;
 			auto& header = directive / "directive" / "header";
 			auto ns = header / "namespace"_jss;
 			auto name = header / "name"_jss;
-			std::fprintf(stderr, "parser(%p) directive: %s.%s\n", this, ns.c_str(), name.c_str());
+			if (v_session.v_log) v_session.v_log(e_severity__INFORMATION) << "parser(" << this << ") directive: " << ns + "." << name << std::endl;
 			try {
 				v_session.v_handlers.at({ns, name})(directive);
 			} catch (std::exception& e) {
@@ -215,7 +220,7 @@ private:
 		}
 		void f_part(const std::string& a_type, const std::string& a_id)
 		{
-			std::fprintf(stderr, "parser(%p) part: %s, %s\n", this, a_type.c_str(), a_id.c_str());
+			if (v_session.v_log) v_session.v_log(e_severity__TRACE) << "parser(" << this << ") part: " << a_type << ", " << a_id << std::endl;
 			if (a_type == "application/json") {
 				v_content = &t_parser::f_json_content;
 				v_finish = &t_parser::f_json_finish;
@@ -258,7 +263,7 @@ private:
 	boost::asio::ssl::context v_tls;
 	t_scheduler& v_scheduler;
 	nghttp2::asio_http2::header_map v_header;
-	ALuint v_sounds[4];
+	const ALuint* v_sounds;
 	std::unique_ptr<nghttp2::asio_http2::client::session> v_session;
 	bool v_online = false;
 	boost::asio::steady_timer* v_reconnecting = nullptr;
@@ -275,7 +280,7 @@ private:
 				v_expecting_speech = [this, timeout]
 				{
 					this->f_dialog_acquire(*v_recognizer);
-					std::fprintf(stderr, "expecting speech within %dms.\n", timeout);
+					if (v_log) v_log(e_severity__INFORMATION) << "dialog(" << v_expecting_dialog_id << ") expecting speech within " << timeout << " ms." << std::endl;
 					v_expecting_timeout = &v_scheduler.f_run_in(std::chrono::milliseconds(timeout), [this](auto a_ec)
 					{
 						if (!v_expecting_speech) return;
@@ -296,7 +301,7 @@ private:
 			auto token = payload / "token"_jss;
 			try {
 				this->f_alerts_set(token, payload / "type"_jss, payload / "scheduledTime"_jss);
-				this->f_alerts_save();
+				if (v_alerts_changed) v_alerts_changed();
 				this->f_alerts_event("SetAlertSucceeded", token);
 			} catch (std::exception& e) {
 				this->f_exception_encountered("Alerts.SetAlert", "INTERNAL_ERROR", e.what());
@@ -309,7 +314,7 @@ private:
 			auto token = payload / "token"_jss;
 			try {
 				this->f_alerts_delete(token);
-				this->f_alerts_save();
+				if (v_alerts_changed) v_alerts_changed();
 				this->f_alerts_event("DeleteAlertSucceeded", token);
 			} catch (std::exception& e) {
 				this->f_exception_encountered("Alerts.DeleteAlert", "INTERNAL_ERROR", e.what());
@@ -329,7 +334,7 @@ private:
 			auto& stream = payload / "audioItem" / "stream";
 			auto url = stream / "url"_jss;
 			auto token = stream / "token"_jss;
-			std::fprintf(stderr, "queuing: %s, %s\n", url.c_str(), token.c_str());
+			if (v_log) v_log(e_severity__TRACE) << "queuing: " << url << ", " << token << std::endl;
 			std::function<t_audio_source*()> open;
 			if (url.substr(0, 4) == "cid:")
 				open = [this, token, audio = std::make_shared<t_attached_audio>(*this, v_content->v_task, url.substr(4))]
@@ -515,7 +520,7 @@ private:
 	void f_reconnect()
 	{
 		f_disconnect();
-		std::fprintf(stderr, "reconnect in %d seconds.\n", v_reconnecting_interval);
+		if (v_log) v_log(e_severity__INFORMATION) << "reconnect in " << v_reconnecting_interval << " seconds." << std::endl;
 		v_reconnecting = &v_scheduler.f_run_in(std::chrono::seconds(v_reconnecting_interval), [this](auto a_ec)
 		{
 			if (v_reconnecting) {
@@ -587,7 +592,7 @@ private:
 	}
 	picojson::value f_metadata(const std::string& a_namespace, const std::string& a_name, picojson::value::object&& a_payload)
 	{
-		std::fprintf(stderr, "event: %s.%s\n", a_namespace.c_str(), a_name.c_str());
+		if (v_log) v_log(e_severity__INFORMATION) << "event: " << a_namespace << "." << a_name << std::endl;
 		return picojson::value(picojson::value::object{
 			{"event", picojson::value(picojson::value::object{
 				{"header", picojson::value(picojson::value::object{
@@ -601,19 +606,17 @@ private:
 	}
 	void f_setup(const nghttp2::asio_http2::client::response& a_response)
 	{
-		std::fprintf(stderr, "on response(%p): %d\n", &a_response, a_response.status_code());
-#ifdef ALEXAAGENT_LOG
-		for (auto& x : a_response.header()) std::fprintf(stderr, "%s: %s\n", x.first.c_str(), x.second.value.c_str());
-#endif
+		if (v_log) {
+			auto& log = v_log(e_severity__TRACE);
+			for (auto& x : a_response.header()) log << x.first << ": " << x.second.value << std::endl;
+		}
 		auto i = a_response.header().find("content-type");
 		if (i == a_response.header().end()) return;
 		std::smatch match;
 		if (!std::regex_match(i->second.value, match, v_re_content_type)) return;
-		a_response.on_data([&a_response, parser = std::make_shared<t_parser>(*this, match[1].str())](auto a_p, size_t a_n)
+		a_response.on_data([this, &a_response, parser = std::make_shared<t_parser>(*this, match[1].str())](auto a_p, size_t a_n)
 		{
-#ifdef ALEXAAGENT_LOG
-			std::fprintf(stderr, "response(%p) on data: %d\n", &a_response, a_n);
-#endif
+			if (v_log) v_log(e_severity__TRACE) << "response(" << &a_response << ") on data: " << a_n << std::endl;
 			(*parser)(a_p, a_n);
 		});
 	}
@@ -621,20 +624,20 @@ private:
 	const nghttp2::asio_http2::client::request* f_post(T_data a_data)
 	{
 		if (!v_online) {
-			std::fprintf(stderr, "offline.\n");
+			if (v_log) v_log(e_severity__INFORMATION) << "offline." << std::endl;
 			return nullptr;
 		}
 		boost::system::error_code ec;
 		auto request = v_session->submit(ec, "POST", "https://avs-alexa-na.amazon.com/v20160207/events", a_data, v_header);
 		if (!request) {
-			std::fprintf(stderr, "events POST failed: %s\n", ec.message().c_str());
+			if (v_log) v_log(e_severity__ERROR) << "events POST failed: " << ec.message() << std::endl;
 			f_reconnect();
 			return nullptr;
 		}
-		std::fprintf(stderr, "events POST(%p) opened.\n", request);
+		if (v_log) v_log(e_severity__TRACE) << "events POST(" << request << ") opened." << std::endl;
 		request->on_response([this, request](auto& a_response)
 		{
-			std::fprintf(stderr, "events POST(%p) ", request);
+			if (v_log) v_log(e_severity__TRACE) << "events POST(" << request << ") on response(" << &a_response << ") " << a_response.status_code() << std::endl;
 			this->f_setup(a_response);
 		});
 		return request;
@@ -642,9 +645,9 @@ private:
 	void f_event(const picojson::value& a_metadata)
 	{
 		auto request = f_post(v_boundary_metadata + a_metadata.serialize() + v_boundary_terminator);
-		if (request) request->on_close([request](auto a_code)
+		if (request) request->on_close([this, request](auto a_code)
 		{
-			std::fprintf(stderr, "events POST(%p) on close: %d\n", request, a_code);
+			if (v_log) v_log(e_severity__TRACE) << "events POST(" << request << ") on close: " << a_code << std::endl;
 		});
 	}
 	void f_empty_event(const std::string& a_namespace, const std::string& a_name)
@@ -669,6 +672,7 @@ private:
 			{"token", picojson::value(a_token)}
 		}));
 	}
+protected:
 	void f_alerts_set(const std::string& a_token, const std::string& a_type, const std::string& a_at)
 	{
 		std::tm tm{};
@@ -690,10 +694,10 @@ private:
 		{
 			if (a_ec == boost::asio::error::operation_aborted) {
 				v_alerts.erase(i);
-				this->f_alerts_save();
+				if (v_alerts_changed) v_alerts_changed();
 				return;
 			}
-			std::fprintf(stderr, "alert: %s\n", i->first.c_str());
+			if (v_log) v_log(e_severity__INFORMATION) << "alert: " << i->first << std::endl;
 			auto f = [this, i]
 			{
 				i->second.f_play(v_sounds[(i->second.v_type == "TIMER" ? 0 : 2) + (v_dialog_active ? 1 : 0)], v_dialog_active ? 1.0f / 16.0f : 1.0f);
@@ -703,7 +707,7 @@ private:
 				{
 					this->f_alerts_event("AlertStopped", i->first);
 					v_alerts.erase(i);
-					this->f_alerts_save();
+					if (v_alerts_changed) v_alerts_changed();
 					if (v_dialog_active) return;
 					for (auto& x : v_alerts) if (x.second.v_source) return;
 					this->f_player_foreground();
@@ -716,22 +720,12 @@ private:
 				this->f_player_background(f);
 		}));
 	}
+private:
 	void f_alerts_delete(const std::string& a_token)
 	{
 		auto& alert = v_alerts.at(a_token);
 		if (alert.v_source) throw std::runtime_error("already active");
 		alert.v_timer->cancel();
-	}
-	void f_alerts_save() const
-	{
-		picojson::value alerts(picojson::value::object{});
-		for (auto& x : v_alerts) alerts << x.first & picojson::value::object{
-			{"type", picojson::value(x.second.v_type)},
-			{"scheduledTime", picojson::value(x.second.v_at)}
-		};
-		std::ofstream s("session/alerts.json");
-		alerts.serialize(std::ostreambuf_iterator<char>(s), true);
-		if (v_state_changed) v_state_changed();
 	}
 	void f_player_event(const std::string& a_name)
 	{
@@ -791,12 +785,7 @@ private:
 	void f_speaker_apply()
 	{
 		alListenerf(AL_GAIN, v_speaker_muted ? 0.0f : v_speaker_volume / 100.0f);
-		std::ofstream s("session/speaker.json");
-		picojson::value(picojson::value::object{
-			{"volume", picojson::value(static_cast<double>(v_speaker_volume))},
-			{"muted", picojson::value(v_speaker_muted)}
-		}).serialize(std::ostreambuf_iterator<char>(s), true);
-		if (v_options_changed) v_options_changed();
+		if (v_speaker_changed) v_speaker_changed();
 	}
 	void f_dialog_acquire(t_task& a_task)
 	{
@@ -845,9 +834,6 @@ private:
 		auto now = std::chrono::steady_clock::now();
 		if (v_capture_integral > v_capture_threshold) v_capture_exceeded = now;
 		v_capture_busy = now - v_capture_exceeded < std::chrono::seconds(1);
-		size_t m = v_capture_threshold / 1024;
-		size_t n = v_capture_integral / 1024;
-		std::fprintf(stderr, "%s: %s\x1b[K\r", v_capture_busy ? "BUSY" : "IDLE", (n > m ? std::string(m, '#') + std::string(std::min(n, size_t(72)) - m, '=') : std::string(n, '#') + std::string(m - n, ' ') + '|').c_str());
 		if (v_capture) v_capture();
 		return true;
 	}
@@ -856,7 +842,7 @@ private:
 		while (true) {
 			std::unique_ptr<ALCdevice, decltype(&alcCaptureCloseDevice)> device(alcCaptureOpenDevice(NULL, 16000, AL_FORMAT_MONO16, 1600), alcCaptureCloseDevice);
 			if (!device) {
-				std::fprintf(stderr, "alcCaptureOpenDevice: %d\n", alGetError());
+				if (v_log) v_log(e_severity__ERROR) << "alcCaptureOpenDevice: " << alGetError() << std::endl;
 				v_recognizer->f_wait(std::chrono::seconds(5));
 				continue;
 			}
@@ -882,7 +868,7 @@ private:
 				f_dialog_acquire(*v_recognizer);
 			}
 			if (v_state_changed) v_state_changed();
-			std::fprintf(stderr, "recognize started.\n");
+			if (v_log) v_log(e_severity__INFORMATION) << "recognize started." << std::endl;
 			deque.insert(deque.begin(), v_boundary_audio.begin(), v_boundary_audio.end());
 			{
 				auto metadata = f_metadata("SpeechRecognizer", "Recognize", {
@@ -918,7 +904,7 @@ private:
 				auto p = std::make_shared<decltype(request)>(request);
 				request->on_close([this, p](auto a_code)
 				{
-					std::fprintf(stderr, "events POST(%p) on close: %d\n", *p, a_code);
+					if (v_log) v_log(e_severity__TRACE) << "events POST(" << *p << ") on close: " << a_code << std::endl;
 					*p = nullptr;
 					v_recognizer->f_notify();
 				});
@@ -934,9 +920,9 @@ private:
 					device.reset();
 					do v_recognizer->f_wait(); while (*p);
 				}
-				std::fprintf(stderr, "recognize finished.\n");
+				if (v_log) v_log(e_severity__INFORMATION) << "recognize finished." << std::endl;
 			} else {
-				std::fprintf(stderr, "recognize failed.\n");
+				if (v_log) v_log(e_severity__ERROR) << "recognize failed." << std::endl;
 				while (f_capture(device.get(), buffer, true));
 				f_dialog_release();
 			}
@@ -944,82 +930,25 @@ private:
 			if (v_state_changed) v_state_changed();
 		}
 	}
-	void f_options_save()
-	{
-		std::ofstream s("session/options.json");
-		picojson::value(picojson::value::object{
-			{"alerts_duration", picojson::value(static_cast<double>(v_alerts_duration))},
-			{"content_can_play_in_background", picojson::value(v_content_can_play_in_background)},
-			{"capture_threshold", picojson::value(static_cast<double>(v_capture_threshold))},
-			{"capture_auto", picojson::value(v_capture_auto)}
-		}).serialize(std::ostreambuf_iterator<char>(s), true);
-		if (v_options_changed) v_options_changed();
-	}
-	void f_load_sound(ALuint a_buffer, const std::string& a_path)
-	{
-		t_url_audio_source source(a_path.c_str());
-		t_audio_decoder decoder(source);
-		ALenum format = AL_FORMAT_MONO8;
-		std::vector<char> data;
-		ALsizei rate = 0;
-		decoder([&](size_t a_channels, size_t a_bytes, const char* a_p, size_t a_n, size_t a_rate)
-		{
-			format = a_channels == 1 ? (a_bytes == 1 ? AL_FORMAT_MONO8 : AL_FORMAT_MONO16) : (a_bytes == 1 ? AL_FORMAT_STEREO8 : AL_FORMAT_STEREO16);
-			data.insert(data.end(), a_p, a_p + a_n);
-			rate = a_rate;
-		});
-		alBufferData(a_buffer, format, data.data(), data.size(), rate);
-	}
 
 public:
+	std::function<std::ostream&(t_severity)> v_log;
 	std::function<void()> v_capture;
 	std::function<void()> v_state_changed;
 	std::function<void()> v_options_changed;
+	std::function<void()> v_alerts_changed;
+	std::function<void()> v_speaker_changed;
 	std::function<t_audio_source*(const std::string&)> v_open_audio_by_url = [](auto& a_url)
 	{
 		return new t_url_audio_source(a_url.c_str());
 	};
 
-	t_session(t_scheduler& a_scheduler, const picojson::value& a_sounds) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler)
+	t_session(t_scheduler& a_scheduler, const std::function<std::ostream&(t_severity)>& a_log, const ALuint* a_sounds) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler), v_log(a_log), v_sounds(a_sounds)
 	{
 		v_tls.set_default_verify_paths();
 		boost::system::error_code ec;
 		nghttp2::asio_http2::client::configure_tls_context(ec, v_tls);
-		alGenBuffers(4, v_sounds);
-		f_load_sound(v_sounds[0], a_sounds / "timer" / "foreground"_jss);
-		f_load_sound(v_sounds[1], a_sounds / "timer" / "background"_jss);
-		f_load_sound(v_sounds[2], a_sounds / "alarm" / "foreground"_jss);
-		f_load_sound(v_sounds[3], a_sounds / "alarm" / "background"_jss);
-		try {
-			picojson::value options;
-			std::ifstream s("session/options.json");
-			s >> options;
-			v_alerts_duration = options / "alerts_duration"_jsn;
-			v_content_can_play_in_background = options / "content_can_play_in_background"_jsb;
-			v_capture_threshold = options / "capture_threshold"_jsn;
-			v_capture_auto = options / "capture_auto"_jsb;
-		} catch (std::exception& e) {
-			std::fprintf(stderr, "session/options.json: %s\n", e.what());
-		}
-		try {
-			picojson::value alerts;
-			std::ifstream s("session/alerts.json");
-			s >> alerts;
-			for (auto& x : alerts.get<picojson::value::object>()) f_alerts_set(x.first, x.second / "type"_jss, x.second / "scheduledTime"_jss);
-		} catch (std::exception& e) {
-			std::fprintf(stderr, "session/alerts.json: %s\n", e.what());
-		}
-		try {
-			picojson::value speaker;
-			std::ifstream s("session/speaker.json");
-			s >> speaker;
-			v_speaker_volume = speaker / "volume"_jsn;
-			v_speaker_muted = speaker / "muted"_jsb;
-		} catch (std::exception& e) {
-			std::fprintf(stderr, "session/speaker.json: %s\n", e.what());
-		}
-		f_speaker_apply();
-		auto run = [](const char* a_name, auto a_run)
+		auto run = [this](const char* a_name, auto a_run)
 		{
 			while (true) {
 				try {
@@ -1027,9 +956,9 @@ public:
 				} catch (t_scheduler::t_stop&) {
 					throw;
 				} catch (std::exception& e) {
-					std::fprintf(stderr, "%s: caught %s\n", a_name, e.what());
+					if (v_log) v_log(e_severity__ERROR) << a_name << ": caught " << e.what() << std::endl;
 				} catch (...) {
-					std::fprintf(stderr, "%s: caught unknown.\n", a_name);
+					if (v_log) v_log(e_severity__ERROR) << a_name << ": caught unknown" << std::endl;
 				}
 			}
 		};
@@ -1067,10 +996,6 @@ public:
 			return true;
 		});
 	}
-	~t_session()
-	{
-		alDeleteBuffers(4, v_sounds);
-	}
 	t_scheduler& f_scheduler() const
 	{
 		return v_scheduler;
@@ -1088,20 +1013,20 @@ public:
 		if (v_session) return;
 		v_session.reset(new nghttp2::asio_http2::client::session(v_scheduler.f_io(), v_tls, "avs-alexa-na.amazon.com", "https"));
 		v_session->read_timeout(boost::posix_time::hours(1));
-		std::fprintf(stderr, "session(%p) created\n", v_session.get());
+		if (v_log) v_log(e_severity__TRACE) << "session(" << v_session.get() << ") created." << std::endl;
 		v_session->on_connect([this](auto)
 		{
 			boost::system::error_code ec;
 			auto request = v_session->submit(ec, "GET", "https://avs-alexa-na.amazon.com/v20160207/directives", v_header);
 			if (!request) {
-				std::fprintf(stderr, "directives GET failed: %s\n", ec.message().c_str());
+				if (v_log) v_log(e_severity__ERROR) << "directives GET failed: " << ec.message() << std::endl;
 				this->f_reconnect();
 				return;
 			}
-			std::fprintf(stderr, "directives GET(%p) opened.\n", request);
+			if (v_log) v_log(e_severity__TRACE) << "directives GET(" << request << ") opened." << std::endl;
 			request->on_response([this, request](auto& a_response)
 			{
-				std::fprintf(stderr, "directives GET(%p) ", request);
+				if (v_log) v_log(e_severity__TRACE) << "directives GET(" << request << ") on response(" << &a_response << ") " << a_response.status_code() << std::endl;
 				this->f_setup(a_response);
 				v_online = true;
 				v_reconnecting_interval = 1;
@@ -1110,14 +1035,14 @@ public:
 				this->f_event(metadata);
 				if (v_state_changed) v_state_changed();
 			});
-			request->on_close([request](auto a_code)
+			request->on_close([this, request](auto a_code)
 			{
-				std::fprintf(stderr, "directives GET(%p) on close: %d\n", request, a_code);
+				if (v_log) v_log(e_severity__TRACE) << "directives GET(" << request << ") closed: " << a_code << std::endl;
 			});
 		});
 		v_session->on_error([this](auto a_ec)
 		{
-			std::fprintf(stderr, "session(%p) on error: %s\n", v_session.get(), a_ec.message().c_str());
+			if (v_log) v_log(e_severity__ERROR) << "session(" << v_session.get() << ") on error: " << a_ec.message() << std::endl;
 			this->f_reconnect();
 		});
 	}
@@ -1154,20 +1079,20 @@ public:
 	{
 		return v_alerts;
 	}
-	size_t f_alerts_duration() const
-	{
-		return v_alerts_duration;
-	}
 	void f_alerts_stop(const std::string& a_token)
 	{
 		auto i = v_alerts.find(a_token);
 		if (i != v_alerts.end() && i->second.v_source) i->second.v_timer->cancel();
 	}
+	size_t f_alerts_duration() const
+	{
+		return v_alerts_duration;
+	}
 	void f_alerts_duration(size_t a_value)
 	{
 		if (a_value == v_alerts_duration) return;
 		v_alerts_duration = a_value;
-		f_options_save();
+		if (v_options_changed) v_options_changed();
 	}
 	bool f_content_can_play_in_background() const
 	{
@@ -1177,7 +1102,7 @@ public:
 	{
 		if (a_value == v_content_can_play_in_background) return;
 		v_content_can_play_in_background = a_value;
-		f_options_save();
+		if (v_options_changed) v_options_changed();
 	}
 	bool f_content_playing() const
 	{
@@ -1230,7 +1155,7 @@ public:
 		if (a_value == v_capture_threshold) return;
 		v_capture_threshold = a_value;
 		v_recognizer->f_notify();
-		f_options_save();
+		if (v_options_changed) v_options_changed();
 	}
 	size_t f_capture_integral() const
 	{
@@ -1249,7 +1174,7 @@ public:
 		if (a_value == v_capture_auto) return;
 		v_capture_auto = a_value;
 		v_recognizer->f_notify();
-		f_options_save();
+		if (v_options_changed) v_options_changed();
 	}
 	bool f_capture_force() const
 	{

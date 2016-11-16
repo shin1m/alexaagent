@@ -20,6 +20,7 @@ alexaagent_SOURCES = \
 	scheduler.h \
 	session.h \
 	tiny_http.h \
+	agent.h \
 	main.cc
 play_file_LDADD = $(OPENAL_LIBS) $(LIBAVCODEC_LIBS) $(LIBAVFORMAT_LIBS) $(LIBAVUTIL_LIBS)
 play_file_SOURCES = \
