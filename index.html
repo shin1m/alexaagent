@@ -154,15 +154,8 @@ document.addEventListener("DOMContentLoaded", function() {
       }, false);
       capture_auto.addEventListener("change", check_sender("capture.auto", capture_auto), false);
       content_background.addEventListener("change", check_sender("content.background", content_background), false);
-      var poster = function(path) {
-        return function() {
-          var xhr = new XMLHttpRequest();
-          xhr.open("POST", path);
-          xhr.send();
-        };
-      };
-      connect.addEventListener("click", poster("connect"), false);
-      disconnect.addEventListener("click", poster("disconnect"), false);
+      connect.addEventListener("click", empty_sender("connect"), false);
+      disconnect.addEventListener("click", empty_sender("disconnect"), false);
       send({hello: null});
     };
     var threshold;
