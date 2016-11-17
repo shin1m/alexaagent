@@ -33,7 +33,23 @@ public:
 	std::function<void()> v_capture;
 	std::function<void()> v_options_changed;
 
-	t_agent(t_scheduler& a_scheduler, const std::function<std::ostream&(t_severity)>& a_log, const std::string& a_id, const std::string& a_secret, const picojson::value& a_sounds) : t_session(a_scheduler, a_log, v_sounds), v_id(a_id), v_secret(a_secret)
+	t_agent(t_scheduler& a_scheduler, const std::function<std::ostream&(t_severity)>& a_log, const std::string& a_id, const std::string& a_secret, const picojson::value& a_sounds) : t_session(a_scheduler, a_log, [this](auto a_type)
+	{
+		ALuint x;
+		alGenSources(1, &x);
+		std::shared_ptr<ALuint> source{new ALuint(x), [](auto a_x)
+		{
+			alDeleteSources(1, a_x);
+		}};
+		alSourcei(*source, AL_LOOPING, AL_TRUE);
+		return [source, sounds = v_sounds + (a_type == "TIMER" ? 0 : 2)](bool a_background)
+		{
+			alSourceStop(*source);
+			alSourcei(*source, AL_BUFFER, sounds[a_background ? 1 : 0]);
+			alSourcef(*source, AL_GAIN, a_background ? 1.0f / 16.0f : 1.0f);
+			alSourcePlay(*source);
+		};
+	}), v_id(a_id), v_secret(a_secret)
 	{
 		alGenBuffers(4, v_sounds);
 		f_load_sound(v_sounds[0], a_sounds / "timer" / "foreground"_jss);
@@ -98,7 +114,7 @@ public:
 			};
 			std::ofstream s("session/alerts.json");
 			alerts.serialize(std::ostreambuf_iterator<char>(s), true);
-			if (v_options_changed) v_options_changed();
+			if (v_state_changed) v_state_changed();
 		};
 		v_speaker_changed = [this]
 		{

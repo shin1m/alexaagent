@@ -86,27 +86,15 @@ public:
 		std::string v_type;
 		std::string v_at;
 		std::unique_ptr<boost::asio::system_timer> v_timer;
-		std::unique_ptr<ALuint, void (*)(ALuint*)> v_source{nullptr, [](auto a_x)
-		{
-			alDeleteSources(1, a_x);
-		}};
+		std::function<void(bool)> v_play;
 
 		t_alert(const std::string& a_type, const std::string& a_at) : v_type(a_type), v_at(a_at)
 		{
 		}
-		void f_play(ALuint a_buffer, ALfloat a_gain)
+		void f_cancel()
 		{
-			if (v_source) {
-				alSourceStop(*v_source);
-			} else {
-				ALuint source;
-				alGenSources(1, &source);
-				v_source.reset(new ALuint(source));
-				alSourcei(source, AL_LOOPING, AL_TRUE);
-			}
-			alSourcei(*v_source, AL_BUFFER, a_buffer);
-			alSourcef(*v_source, AL_GAIN, a_gain);
-			alSourcePlay(*v_source);
+			v_type.clear();
+			v_timer->cancel();
 		}
 
 	public:
@@ -120,7 +108,7 @@ public:
 		}
 		bool f_active() const
 		{
-			return static_cast<bool>(v_source);
+			return static_cast<bool>(v_play);
 		}
 	};
 private:
@@ -263,7 +251,7 @@ private:
 	boost::asio::ssl::context v_tls;
 	t_scheduler& v_scheduler;
 	nghttp2::asio_http2::header_map v_header;
-	const ALuint* v_sounds;
+	std::function<std::function<void(bool)>(const std::string&)> v_open_sound;
 	std::unique_ptr<nghttp2::asio_http2::client::session> v_session;
 	bool v_online = false;
 	boost::asio::steady_timer* v_reconnecting = nullptr;
@@ -542,7 +530,7 @@ private:
 				{"type", picojson::value(x.second.v_type)},
 				{"scheduledTime", picojson::value(x.second.v_at)}
 			});
-			if (x.second.v_source) active.push_back(alert);
+			if (x.second.f_active()) active.push_back(alert);
 			all.push_back(std::move(alert));
 		}
 		return picojson::value(picojson::value::array{
@@ -692,7 +680,7 @@ protected:
 		i->second.v_timer.reset(new boost::asio::system_timer(v_scheduler.f_io(), at));
 		i->second.v_timer->async_wait(v_scheduler.wrap([this, i](auto a_ec)
 		{
-			if (a_ec == boost::asio::error::operation_aborted) {
+			if (i->second.v_type.empty()) {
 				v_alerts.erase(i);
 				if (v_alerts_changed) v_alerts_changed();
 				return;
@@ -700,7 +688,8 @@ protected:
 			if (v_log) v_log(e_severity__INFORMATION) << "alert: " << i->first << std::endl;
 			auto f = [this, i]
 			{
-				i->second.f_play(v_sounds[(i->second.v_type == "TIMER" ? 0 : 2) + (v_dialog_active ? 1 : 0)], v_dialog_active ? 1.0f / 16.0f : 1.0f);
+				i->second.v_play = v_open_sound(i->second.v_type);
+				i->second.v_play(v_dialog_active);
 				this->f_alerts_event("AlertStarted", i->first);
 				i->second.v_timer->expires_from_now(std::chrono::seconds(v_alerts_duration));
 				i->second.v_timer->async_wait(v_scheduler.wrap([this, i](auto)
@@ -709,7 +698,7 @@ protected:
 					v_alerts.erase(i);
 					if (v_alerts_changed) v_alerts_changed();
 					if (v_dialog_active) return;
-					for (auto& x : v_alerts) if (x.second.v_source) return;
+					for (auto& x : v_alerts) if (x.second.f_active()) return;
 					this->f_player_foreground();
 				}));
 				if (v_state_changed) v_state_changed();
@@ -724,8 +713,8 @@ private:
 	void f_alerts_delete(const std::string& a_token)
 	{
 		auto& alert = v_alerts.at(a_token);
-		if (alert.v_source) throw std::runtime_error("already active");
-		alert.v_timer->cancel();
+		if (alert.f_active()) throw std::runtime_error("already active");
+		alert.f_cancel();
 	}
 	void f_player_event(const std::string& a_name)
 	{
@@ -792,8 +781,8 @@ private:
 		while (v_dialog_active) a_task.f_wait();
 		v_dialog_active = true;
 		for (auto& x : v_alerts) {
-			if (!x.second.v_source) continue;
-			x.second.f_play(v_sounds[x.second.v_type == "TIMER" ? 1 : 3], 1.0f / 16.0f);
+			if (!x.second.f_active()) continue;
+			x.second.v_play(true);
 			f_alerts_event("AlertEnteredBackground", x.first);
 		}
 		bool done = false;
@@ -808,8 +797,8 @@ private:
 	{
 		bool b = false;
 		for (auto& x : v_alerts) {
-			if (!x.second.v_source) continue;
-			x.second.f_play(v_sounds[x.second.v_type == "TIMER" ? 0 : 2], 1.0f);
+			if (!x.second.f_active()) continue;
+			x.second.v_play(false);
 			f_alerts_event("AlertEnteredForeground", x.first);
 			b = true;
 		}
@@ -943,7 +932,7 @@ public:
 		return new t_url_audio_source(a_url.c_str());
 	};
 
-	t_session(t_scheduler& a_scheduler, const std::function<std::ostream&(t_severity)>& a_log, const ALuint* a_sounds) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler), v_log(a_log), v_sounds(a_sounds)
+	t_session(t_scheduler& a_scheduler, const std::function<std::ostream&(t_severity)>& a_log, const std::function<std::function<void(bool)>(const std::string&)> a_open_sound) : v_tls(boost::asio::ssl::context::tlsv12), v_scheduler(a_scheduler), v_log(a_log), v_open_sound(a_open_sound)
 	{
 		v_tls.set_default_verify_paths();
 		boost::system::error_code ec;
@@ -1082,7 +1071,7 @@ public:
 	void f_alerts_stop(const std::string& a_token)
 	{
 		auto i = v_alerts.find(a_token);
-		if (i != v_alerts.end() && i->second.v_source) i->second.v_timer->cancel();
+		if (i != v_alerts.end() && i->second.f_active()) i->second.f_cancel();
 	}
 	size_t f_alerts_duration() const
 	{
