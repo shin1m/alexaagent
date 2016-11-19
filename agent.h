@@ -6,14 +6,9 @@
 #include "session.h"
 #include "tiny_http.h"
 
-class t_agent : public t_session
+class t_agent
 {
-	std::string v_id;
-	std::string v_secret;
-	ALuint v_sounds[4];
-	size_t v_refresh_retry_interval = 1;
-
-	void f_load_sound(ALuint a_buffer, const std::string& a_path)
+	static void f_load_sound(ALuint a_buffer, const std::string& a_path)
 	{
 		t_url_audio_source source(a_path.c_str());
 		t_audio_decoder decoder(source);
@@ -29,41 +24,41 @@ class t_agent : public t_session
 		alBufferData(a_buffer, format, data.data(), data.size(), rate);
 	}
 
-public:
-	std::function<void()> v_capture;
-	std::function<void()> v_options_changed;
+	ALCdevice* v_device;
+	ALCcontext* v_context;
+	const picojson::value& v_profile;
+	ALuint v_sounds[4];
+	std::unique_ptr<t_scheduler> v_scheduler;
+	std::unique_ptr<t_session> v_session;
+	size_t v_refresh_retry_interval = 1;
 
-	t_agent(t_scheduler& a_scheduler, const std::function<std::ostream&(t_severity)>& a_log, const std::string& a_id, const std::string& a_secret, const picojson::value& a_sounds) : t_session(a_scheduler, a_log, [this](auto a_type)
+	void f_create()
 	{
-		ALuint x;
-		alGenSources(1, &x);
-		std::shared_ptr<ALuint> source{new ALuint(x), [](auto a_x)
+		v_session.reset(new t_session(*v_scheduler, v_log, [this](auto a_type)
 		{
-			alDeleteSources(1, a_x);
-		}};
-		alSourcei(*source, AL_LOOPING, AL_TRUE);
-		return [source, sounds = v_sounds + (a_type == "TIMER" ? 0 : 2)](bool a_background)
-		{
-			alSourceStop(*source);
-			alSourcei(*source, AL_BUFFER, sounds[a_background ? 1 : 0]);
-			alSourcef(*source, AL_GAIN, a_background ? 1.0f / 16.0f : 1.0f);
-			alSourcePlay(*source);
-		};
-	}), v_id(a_id), v_secret(a_secret)
-	{
-		alGenBuffers(4, v_sounds);
-		f_load_sound(v_sounds[0], a_sounds / "timer" / "foreground"_jss);
-		f_load_sound(v_sounds[1], a_sounds / "timer" / "background"_jss);
-		f_load_sound(v_sounds[2], a_sounds / "alarm" / "foreground"_jss);
-		f_load_sound(v_sounds[3], a_sounds / "alarm" / "background"_jss);
+			ALuint x;
+			alGenSources(1, &x);
+			std::shared_ptr<ALuint> source{new ALuint(x), [](auto a_x)
+			{
+				alDeleteSources(1, a_x);
+			}};
+			alSourcei(*source, AL_LOOPING, AL_TRUE);
+			return [source, sounds = v_sounds + (a_type == "TIMER" ? 0 : 2)](bool a_background)
+			{
+				alSourceStop(*source);
+				alSourcei(*source, AL_BUFFER, sounds[a_background ? 1 : 0]);
+				alSourcef(*source, AL_GAIN, a_background ? 1.0f / 16.0f : 1.0f);
+				alSourcePlay(*source);
+			};
+		}));
 		try {
 			picojson::value options;
 			std::ifstream s("session/options.json");
 			s >> options;
-			f_alerts_duration(options / "alerts_duration"_jsn);
-			f_content_can_play_in_background(options / "content_can_play_in_background"_jsb);
-			f_capture_threshold(options / "capture_threshold"_jsn);
-			f_capture_auto(options / "capture_auto"_jsb);
+			v_session->f_alerts_duration(options / "alerts_duration"_jsn);
+			v_session->f_content_can_play_in_background(options / "content_can_play_in_background"_jsb);
+			v_session->f_capture_threshold(options / "capture_threshold"_jsn);
+			v_session->f_capture_auto(options / "capture_auto"_jsb);
 		} catch (std::exception& e) {
 			if (v_log) v_log(e_severity__ERROR) << "loading session/options.json: " << e.what() << std::endl;
 		}
@@ -71,7 +66,7 @@ public:
 			picojson::value alerts;
 			std::ifstream s("session/alerts.json");
 			s >> alerts;
-			for (auto& x : alerts.get<picojson::value::object>()) f_alerts_set(x.first, x.second / "type"_jss, x.second / "scheduledTime"_jss);
+			for (auto& x : alerts.get<picojson::value::object>()) v_session->f_alerts_set(x.first, x.second / "type"_jss, x.second / "scheduledTime"_jss);
 		} catch (std::exception& e) {
 			if (v_log) v_log(e_severity__ERROR) << "loading session/alerts.json: " << e.what() << std::endl;
 		}
@@ -79,36 +74,40 @@ public:
 			picojson::value speaker;
 			std::ifstream s("session/speaker.json");
 			s >> speaker;
-			f_speaker_volume(speaker / "volume"_jsn);
-			f_speaker_muted(speaker / "muted"_jsb);
+			v_session->f_speaker_volume(speaker / "volume"_jsn);
+			v_session->f_speaker_muted(speaker / "muted"_jsb);
 		} catch (std::exception& e) {
 			if (v_log) v_log(e_severity__ERROR) << "loading session/speaker.json: " << e.what() << std::endl;
 		}
-		t_session::v_capture = [this]
+		v_session->v_capture = [this]
 		{
-			size_t m = f_capture_threshold() / 1024;
-			size_t n = f_capture_integral() / 1024;
+			size_t m = v_session->f_capture_threshold() / 1024;
+			size_t n = v_session->f_capture_integral() / 1024;
 			std::cerr
-				<< (f_capture_busy() ? "BUSY" : "IDLE") << ": "
+				<< (v_session->f_capture_busy() ? "BUSY" : "IDLE") << ": "
 				<< (n > m ? std::string(m, '#') + std::string(std::min(n, size_t(72)) - m, '=') : std::string(n, '#') + std::string(m - n, ' ') + '|')
 				<< "\x1b[K\r";
 			if (v_capture) v_capture();
 		};
-		t_session::v_options_changed = [this]
+		v_session->v_state_changed = [this]
+		{
+			if (v_state_changed) v_state_changed();
+		};
+		v_session->v_options_changed = [this]
 		{
 			std::ofstream s("session/options.json");
 			picojson::value(picojson::value::object{
-				{"alerts_duration", picojson::value(static_cast<double>(f_alerts_duration()))},
-				{"content_can_play_in_background", picojson::value(f_content_can_play_in_background())},
-				{"capture_threshold", picojson::value(static_cast<double>(f_capture_threshold()))},
-				{"capture_auto", picojson::value(f_capture_auto())}
+				{"alerts_duration", picojson::value(static_cast<double>(v_session->f_alerts_duration()))},
+				{"content_can_play_in_background", picojson::value(v_session->f_content_can_play_in_background())},
+				{"capture_threshold", picojson::value(static_cast<double>(v_session->f_capture_threshold()))},
+				{"capture_auto", picojson::value(v_session->f_capture_auto())}
 			}).serialize(std::ostreambuf_iterator<char>(s), true);
 			if (v_options_changed) v_options_changed();
 		};
-		v_alerts_changed = [this]
+		v_session->v_alerts_changed = [this]
 		{
 			picojson::value alerts(picojson::value::object{});
-			for (auto& x : f_alerts()) alerts << x.first & picojson::value::object{
+			for (auto& x : v_session->f_alerts()) alerts << x.first & picojson::value::object{
 				{"type", picojson::value(x.second.f_type())},
 				{"scheduledTime", picojson::value(x.second.f_at())}
 			};
@@ -116,16 +115,16 @@ public:
 			alerts.serialize(std::ostreambuf_iterator<char>(s), true);
 			if (v_state_changed) v_state_changed();
 		};
-		v_speaker_changed = [this]
+		v_session->v_speaker_changed = [this]
 		{
 			std::ofstream s("session/speaker.json");
 			picojson::value(picojson::value::object{
-				{"volume", picojson::value(static_cast<double>(f_speaker_volume()))},
-				{"muted", picojson::value(f_speaker_muted())}
+				{"volume", picojson::value(static_cast<double>(v_session->f_speaker_volume()))},
+				{"muted", picojson::value(v_session->f_speaker_muted())}
 			}).serialize(std::ostreambuf_iterator<char>(s), true);
 			if (v_options_changed) v_options_changed();
 		};
-		v_open_audio_by_url = [this, open = v_open_audio_by_url](auto& a_url)
+		v_session->v_open_audio_by_url = [this, open = v_session->v_open_audio_by_url](auto& a_url)
 		{
 			try {
 				auto url = a_url;
@@ -185,43 +184,39 @@ public:
 			}
 		};
 	}
-	~t_agent()
+	template<typename T_done>
+	void f_grant(std::map<std::string, std::string>&& a_query, T_done a_done)
 	{
-		alDeleteBuffers(4, v_sounds);
-	}
-	void f_grant(std::map<std::string, std::string>&& a_query, std::function<void(const boost::system::error_code&)> a_done)
-	{
-		a_query.emplace("client_id", v_id);
-		a_query.emplace("client_secret", v_secret);
+		a_query.emplace("client_id", v_profile / "client_id"_jss);
+		a_query.emplace("client_secret", v_profile / "client_secret"_jss);
 		auto http = std::make_shared<t_http10>("https://api.amazon.com/auth/o2/token");
-		(*http)("POST", a_query)(f_scheduler().f_io(), [this, a_done, http](auto a_socket)
+		(*http)("POST", a_query)(v_scheduler->f_io(), [this, a_done, http](auto a_socket)
 		{
-			boost::asio::async_read(*a_socket, http->v_buffer, this->f_scheduler().wrap([this, a_done, http, a_socket](auto a_ec, auto)
+			boost::asio::async_read(*a_socket, http->v_buffer, v_scheduler->wrap([this, a_done, http, a_socket](auto a_ec, auto)
 			{
 				std::istream stream(&http->v_buffer);
 				picojson::value result;
 				stream >> result;
-#ifdef ALEXAAGENT_LOG
-				std::fprintf(stderr, "grant: %s %d%s\n%s\n", http->v_http.c_str(), http->v_code, http->v_message.c_str(), result.serialize(true).c_str());
-#endif
+				if (v_log) v_log(e_severity__TRACE) << "grant: " << http->v_http << ' ' << http->v_code << http->v_message << std::endl << result.serialize(true) << std::endl;
 				if (http->v_code == 200) {
 					auto access_token = result / "access_token"_jss;
 					size_t expires_in = result / "expires_in"_jsn;
 					auto refresh_token = result / "refresh_token"_jss;
 					std::ofstream("session/token") << refresh_token;
-					this->f_token(access_token);
-					this->f_scheduler().f_run_in(std::chrono::seconds(expires_in), [this, refresh_token](auto)
+					if (!v_session) this->f_create();
+					v_session->f_token(access_token);
+					v_scheduler->f_run_in(std::chrono::seconds(expires_in), [this, refresh_token](auto)
 					{
 						this->f_refresh(refresh_token);
 					});
-					a_done({});
+					a_done(boost::system::error_code());
 				} else {
 					a_done(boost::system::errc::make_error_code(boost::system::errc::protocol_error));
 				}
 			}));
-		}, f_scheduler().wrap([this, a_done](auto a_ec)
+		}, v_scheduler->wrap([this, a_done](auto a_ec)
 		{
-			std::fprintf(stderr, "grant: %s\n", a_ec.message().c_str());
+			if (v_log) v_log(e_severity__ERROR) << "grant: " << a_ec.message() << std::endl;
 			a_done(a_ec);
 		}));
 	}
@@ -234,7 +229,7 @@ public:
 		{
 			if (a_ec) {
 				if (v_log) v_log(e_severity__ERROR) << "grant retry in " << v_refresh_retry_interval << " seconds." << std::endl;
-				this->f_scheduler().f_run_in(std::chrono::seconds(v_refresh_retry_interval), [this, a_token](auto)
+				v_scheduler->f_run_in(std::chrono::seconds(v_refresh_retry_interval), [this, a_token](auto)
 				{
 					this->f_refresh(a_token);
 				});
@@ -242,6 +237,81 @@ public:
 			} else {
 				v_refresh_retry_interval = 1;
 			}
+		});
+	}
+
+public:
+	std::function<std::ostream&(t_severity)> v_log;
+	std::function<void()> v_capture;
+	std::function<void()> v_state_changed;
+	std::function<void()> v_options_changed;
+
+	t_agent(const std::function<std::ostream&(t_severity)>& a_log, const picojson::value& a_profile, const picojson::value& a_sounds) : v_log(a_log), v_profile(a_profile)
+	{
+		av_register_all();
+		avformat_network_init();
+		v_device = alcOpenDevice(NULL);
+		if (v_device == NULL) throw std::runtime_error("alcOpenDevice");
+		v_context = alcCreateContext(v_device, NULL);
+		alcMakeContextCurrent(v_context);
+		alGetError();
+		alGenBuffers(4, v_sounds);
+		f_load_sound(v_sounds[0], a_sounds / "timer" / "foreground"_jss);
+		f_load_sound(v_sounds[1], a_sounds / "timer" / "background"_jss);
+		f_load_sound(v_sounds[2], a_sounds / "alarm" / "foreground"_jss);
+		f_load_sound(v_sounds[3], a_sounds / "alarm" / "background"_jss);
+	}
+	~t_agent()
+	{
+		alDeleteBuffers(4, v_sounds);
+		alcMakeContextCurrent(NULL);
+		alcDestroyContext(v_context);
+		alcCloseDevice(v_device);
+	}
+	bool f_activated() const
+	{
+		return static_cast<bool>(std::ifstream("session/token"));
+	}
+	t_scheduler& f_scheduler() const
+	{
+		return *v_scheduler;
+	}
+	t_session* f_session() const
+	{
+		return v_session.get();
+	}
+	template<typename T_done>
+	void f_start(boost::asio::io_service& a_io, T_done a_done)
+	{
+		v_scheduler.reset(new t_scheduler(a_io));
+		std::string token;
+		std::ifstream("session/token") >> token;
+		if (!token.empty()) v_scheduler->dispatch([this, a_done, token]
+		{
+			f_create();
+			f_refresh(token);
+			a_done();
+		});
+	}
+	template<typename T_done>
+	void f_stop(T_done a_done)
+	{
+		v_scheduler->dispatch([this, a_done]
+		{
+			if (v_session) v_session->f_disconnect();
+			v_scheduler->f_shutdown(a_done);
+		});
+	}
+	template<typename T_done>
+	void f_grant(const std::string& a_code, T_done a_done)
+	{
+		v_scheduler->dispatch([this, a_code, a_done]
+		{
+			this->f_grant({
+				{"grant_type", "authorization_code"},
+				{"code", a_code},
+				{"redirect_uri", v_profile / "redirect_uri"_jss}
+			}, a_done);
 		});
 	}
 };

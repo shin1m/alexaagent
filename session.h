@@ -660,7 +660,7 @@ private:
 			{"token", picojson::value(a_token)}
 		}));
 	}
-protected:
+public:
 	void f_alerts_set(const std::string& a_token, const std::string& a_type, const std::string& a_at)
 	{
 		std::tm tm{};

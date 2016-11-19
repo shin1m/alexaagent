@@ -100,17 +100,17 @@ public:
 			v_tasks.erase(i);
 		});
 	}
-	template<typename T_completed>
-	void f_shutdown(T_completed&& a_completed)
+	template<typename T_done>
+	void f_shutdown(T_done&& a_done)
 	{
 		if (v_tasks.empty()) {
-			a_completed();
+			a_done();
 			return;
 		}
-		auto& stopping = f_run_every(std::chrono::duration<int>::max(), [this, a_completed = std::move(a_completed)](auto)
+		auto& stopping = f_run_every(std::chrono::duration<int>::max(), [this, a_done = std::move(a_done)](auto)
 		{
 			if (!v_tasks.empty()) return true;
-			a_completed();
+			a_done();
 			return false;
 		});
 		for (auto& x : v_tasks) x->f_post([&](auto)
